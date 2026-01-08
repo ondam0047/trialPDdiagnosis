@@ -1,6 +1,7 @@
 
 import streamlit as st
-import streamlit.components.v1 as components
+import streamlit.components.v1 as co
+import base64mponents
 import re
 
 # NOTE: This app requires Praat-Parselmouth for F0/Intensity/Pitch-range extraction.
@@ -460,9 +461,30 @@ def consent_block():
         with st.expander("연구팀 테스트(중복 참여 허용)", expanded=False):
             tester_mode = st.checkbox("연구팀/테스트 모드로 진행", value=False)
             tester_code = st.text_input("테스트 코드(관리자용)", type="password", value="")
-        dist_ok = st.checkbox("녹음 기기(마이크)와의 거리가 약 30cm임을 확인했습니다. (필수)")
-        read_ok = st.checkbox("사용 방법 안내를 읽고 이해했습니다. (필수)")
-        consent = st.checkbox("본 연구(온라인 음성 평가) 참여에 동의합니다. (필수)")
+        # --- Required confirmations (bigger / bold) ---
+        st.markdown(
+            """<style>
+            .consent-check{font-size:18px;font-weight:800;line-height:1.45;margin-top:2px;margin-bottom:8px;}
+            </style>""", unsafe_allow_html=True
+        )
+
+        c1, c2 = st.columns([0.07, 0.93], vertical_alignment="center")
+        with c1:
+            dist_ok = st.checkbox(" ", key="dist_ok_chk", label_visibility="collapsed")
+        with c2:
+            st.markdown("""<div class="consent-check"><b>녹음 기기(마이크)와의 거리가 약 30cm임을 확인했습니다. (필수)</b></div>""", unsafe_allow_html=True)
+
+        c1, c2 = st.columns([0.07, 0.93], vertical_alignment="center")
+        with c1:
+            read_ok = st.checkbox(" ", key="read_ok_chk", label_visibility="collapsed")
+        with c2:
+            st.markdown("""<div class="consent-check"><b>사용 방법 안내를 읽고 이해했습니다. (필수)</b></div>""", unsafe_allow_html=True)
+
+        c1, c2 = st.columns([0.07, 0.93], vertical_alignment="center")
+        with c1:
+            consent = st.checkbox(" ", key="consent_chk", label_visibility="collapsed")
+        with c2:
+            st.markdown("""<div class="consent-check"><b>본 연구(온라인 음성 평가) 참여에 동의합니다. (필수)</b></div>""", unsafe_allow_html=True)
         submitted = st.form_submit_button("✅ 동의하고 시작하기")
 
     if submitted:
@@ -601,20 +623,178 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-audio = st.audio_input("🎙️ 녹음 시작/정지")
+# --- One-button audio recorder (start/stop) ---
+def _audio_recorder_one_button(key: str = "recorder") -> dict | None:
+    """Return dict {'wav_base64': str, 'sample_rate': int} when recording stops."""
+    html = r'''
+<div style="display:flex; flex-direction:column; gap:10px; font-family: sans-serif;">
+  <button id="recBtn"
+    style="font-size:20px; font-weight:700; padding:12px 16px; border-radius:12px; border:1px solid rgba(0,0,0,0.2); cursor:pointer;">
+    🔴 녹음 시작
+  </button>
+  <div id="status" style="font-size:14px; opacity:0.85;">버튼을 눌러 녹음을 시작하세요.</div>
+</div>
+
+<script>
+(function() {
+  const sendValue = (value) => {
+    const msg = {isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value};
+    window.parent.postMessage(msg, "*");
+  };
+  const setHeight = (height) => {
+    const msg = {isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: height};
+    window.parent.postMessage(msg, "*");
+  };
+  setHeight(170);
+
+  const recBtn = document.getElementById("recBtn");
+  const status = document.getElementById("status");
+
+  let recording = false;
+  let audioContext = null;
+  let processor = null;
+  let source = null;
+  let stream = null;
+  let chunks = [];
+  let sampleRate = 44100;
+  let t0 = null;
+  let timer = null;
+
+  function mergeChunks(chunks) {
+    let length = 0;
+    for (const c of chunks) length += c.length;
+    const result = new Float32Array(length);
+    let offset = 0;
+    for (const c of chunks) { result.set(c, offset); offset += c.length; }
+    return result;
+  }
+
+  function floatTo16BitPCM(output, offset, input) {
+    for (let i = 0; i < input.length; i++, offset += 2) {
+      let s = Math.max(-1, Math.min(1, input[i]));
+      output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+  }
+
+  function writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+
+  function encodeWAV(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(view, 8, 'WAVE');
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(view, 36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    floatTo16BitPCM(view, 44, samples);
+
+    return new Uint8Array(buffer);
+  }
+
+  async function startRecording() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      status.textContent = "마이크 권한이 필요합니다. 브라우저에서 마이크 접근을 허용해주세요.";
+      return;
+    }
+    chunks = [];
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    sampleRate = audioContext.sampleRate;
+
+    source = audioContext.createMediaStreamSource(stream);
+    processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+    const gain = audioContext.createGain();
+    gain.gain.value = 0.0;
+
+    processor.onaudioprocess = (e) => {
+      if (!recording) return;
+      const input = e.inputBuffer.getChannelData(0);
+      chunks.push(new Float32Array(input));
+    };
+
+    source.connect(processor);
+    processor.connect(gain);
+    gain.connect(audioContext.destination);
+
+    recording = true;
+    recBtn.textContent = "⏹️ 녹음 정지";
+    t0 = Date.now();
+    timer = setInterval(() => {
+      const sec = Math.floor((Date.now() - t0) / 1000);
+      status.textContent = `녹음 중... ${sec}초 (다시 누르면 정지합니다)`;
+    }, 250);
+  }
+
+  async function stopRecording() {
+    recording = false;
+    recBtn.textContent = "🔴 녹음 시작";
+    clearInterval(timer);
+    status.textContent = "녹음을 처리 중입니다...";
+
+    try {
+      if (processor) processor.disconnect();
+      if (source) source.disconnect();
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (audioContext) await audioContext.close();
+    } catch (e) {}
+
+    const samples = mergeChunks(chunks);
+    const wavBytes = encodeWAV(samples, sampleRate);
+
+    // base64 encode
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < wavBytes.length; i += chunkSize) {
+      binary += String.fromCharCode.apply(null, wavBytes.subarray(i, i + chunkSize));
+    }
+    const b64 = btoa(binary);
+
+    status.textContent = "✅ 녹음이 완료되었습니다. 아래에서 재생 후 [녹음된 음성 분석]을 진행하세요.";
+    sendValue({wav_base64: b64, sample_rate: sampleRate});
+  }
+
+  recBtn.addEventListener("click", async () => {
+    if (!recording) {
+      await startRecording();
+    } else {
+      await stopRecording();
+    }
+  });
+})();
+</script>
+'''
+    return co.html(html, height=180, key=key)
+
+rec = _audio_recorder_one_button(key="one_button_recorder")
 
 TEMP_WAV = "temp_eval.wav"
-if audio is not None:
+if rec and isinstance(rec, dict) and rec.get("wav_base64"):
     try:
-        data = audio.getvalue()
-    except Exception:
-        data = audio
-    if data:
+        data = base64.b64decode(rec["wav_base64"])
         with open(TEMP_WAV, "wb") as f:
             f.write(data)
         st.session_state["wav_path"] = str(Path(TEMP_WAV).resolve())
-        st.audio(data, format="audio/wav")
+        st.session_state["wav_bytes"] = data
+    except Exception as e:
+        st.error(f"녹음 데이터 처리 중 오류가 발생했습니다: {e}")
 
+if st.session_state.get("wav_bytes"):
+    st.audio(st.session_state["wav_bytes"], format="audio/wav")
 st.markdown("---")
 
 # =========================
