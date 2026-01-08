@@ -1,7 +1,7 @@
 
 import streamlit as st
-import streamlit.components.v1 as co
-import base64mponents
+import streamlit.components.v1 as components
+import base64
 import re
 
 # NOTE: This app requires Praat-Parselmouth for F0/Intensity/Pitch-range extraction.
@@ -778,7 +778,7 @@ def _audio_recorder_one_button(key: str = "recorder") -> dict | None:
 })();
 </script>
 '''
-    return co.html(html, height=180, key=key)
+    return components.html(html, height=180, key=key)
 
 rec = _audio_recorder_one_button(key="one_button_recorder")
 
