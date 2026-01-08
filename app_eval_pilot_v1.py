@@ -1,5 +1,7 @@
 
 import streamlit as st
+import streamlit.components.v1 as components
+import re
 
 # NOTE: This app requires Praat-Parselmouth for F0/Intensity/Pitch-range extraction.
 # Streamlit Cloud will raise ModuleNotFoundError unless you add it to requirements.txt:
@@ -42,6 +44,13 @@ except Exception:
 # Page config
 # =========================
 st.set_page_config(page_title="PD 음성 평가(평가판)", layout="wide")
+
+# Anchor for programmatic scrolling
+st.markdown('<div id="top"></div>', unsafe_allow_html=True)
+if st.session_state.get("scroll_to_top", False):
+    components.html("<script>window.scrollTo(0,0);</script>", height=0)
+    st.session_state.scroll_to_top = False
+
 
 # --- Prevent duplicate submissions in the same browser session ---
 def make_submission_key(wav_path: str, patient_info: dict) -> str:
@@ -230,9 +239,11 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
     Returns: (log_filename, sheet_ok, sheet_msg, email_ok, email_msg)
     """
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_name = str(patient_info.get("name", "participant")).replace(" ", "")
+    # Build a safe filename label for logging/email
+    raw_name = str(patient_info.get("name", "participant"))
+    safe_name = re.sub(r"[^0-9A-Za-z가-힣_\-]+", "", raw_name.replace(" ", "")) or "participant"
     log_prefix = "TEST_" if patient_info.get("is_test") else ""
-    filename = f"{prefix}{safe_name}_{patient_info.get('age','')}_{patient_info.get('gender','')}_{timestamp}.wav"
+    log_filename = f"{log_prefix}{safe_name}_{patient_info.get('age','')}_{patient_info.get('gender','')}_{timestamp}.wav"
 
     # --- Google Sheet ---
     sheet_ok = False
@@ -558,6 +569,7 @@ def _instructions_body():
     )
     if st.button("닫기"):
         st.session_state.show_instructions = False
+        st.session_state.scroll_to_top = True
         st.rerun()
 
 if st.session_state.get("show_instructions", False):
@@ -816,4 +828,3 @@ if st.button("📤 결과 저장/전송", type="primary", disabled=already_sent)
         st.write(f"- 저장 파일명: `{log_filename}`")
         st.write(f"- 구글시트: {'성공' if sheet_ok else '실패/생략'} · {sheet_msg}")
         st.write(f"- 이메일: {'성공' if email_ok else '실패/생략'} · {email_msg}")
-
