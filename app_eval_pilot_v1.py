@@ -41,6 +41,23 @@ except Exception:
 # Page config
 # =========================
 st.set_page_config(page_title="PD 음성 평가(평가판)", layout="wide")
+
+# --- Prevent duplicate submissions in the same browser session ---
+def make_submission_key(wav_path: str, patient_info: dict) -> str:
+    """Create a stable-ish key for the current recording to prevent duplicate sends."""
+    try:
+        mtime = os.path.getmtime(wav_path) if wav_path and os.path.exists(wav_path) else 0.0
+        size = os.path.getsize(wav_path) if wav_path and os.path.exists(wav_path) else 0
+    except Exception:
+        mtime, size = 0.0, 0
+    p = patient_info or {}
+    name = str(p.get("name", "")).strip()
+    age = str(p.get("age", "")).strip()
+    gender = str(p.get("gender", "")).strip()
+    return f"{os.path.basename(wav_path)}|{mtime:.3f}|{size}|{name}|{age}|{gender}"
+
+if "sent_submission_keys" not in st.session_state:
+    st.session_state["sent_submission_keys"] = set()
 st.title("🧠 파킨슨병(PD) 음성 평가(평가판)")
 
 # =========================
@@ -179,8 +196,13 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
     sheet_msg = ""
     if HAS_GSPREAD and ("gcp_service_account" in st.secrets) and (SHEET_NAME is not None):
         try:
+            # Streamlit secrets may store newlines as literal "\n". Google auth expects real newlines.
+            svc_info = dict(st.secrets["gcp_service_account"])
+            if "private_key" in svc_info and isinstance(svc_info["private_key"], str):
+                svc_info["private_key"] = svc_info["private_key"].replace("\\n", "\n")
+
             creds = service_account.Credentials.from_service_account_info(
-                st.secrets["gcp_service_account"],
+                svc_info,
                 scopes=[
                     "https://www.googleapis.com/auth/spreadsheets",
                     "https://www.googleapis.com/auth/drive",
@@ -536,9 +558,18 @@ st.markdown("---")
 st.header("4. 결과 저장/전송(연구팀 수집)")
 st.caption("※ 이 단계에서는 환자에게 하위집단 진단 결과를 표시하지 않고, 연구팀에게 음성파일과 측정치가 전송됩니다.")
 
-if st.button("📤 결과 저장/전송", type="primary"):
+# Duplicate-send guard (same recording within the same session)
+wav_path_now = st.session_state.get("wav_path")
+analysis_now = st.session_state.get("analysis")
+sub_key = make_submission_key(wav_path_now, st.session_state.get("patient_info", {})) if wav_path_now else ""
+already_sent = bool(sub_key) and (sub_key in st.session_state["sent_submission_keys"])
+if already_sent:
+    st.info("✅ 이 녹음 건은 이미 전송이 완료되었습니다. (중복 전송 방지)\n\n새로 녹음한 뒤 [📈 녹음된 음성 분석]을 다시 누르면 전송 버튼이 다시 활성화됩니다.")
+
+if st.button("📤 결과 저장/전송", type="primary", disabled=already_sent):
     wav_path = st.session_state.get("wav_path")
     analysis = st.session_state.get("analysis")
+
     if not wav_path or not os.path.exists(wav_path):
         st.error("녹음 파일이 없습니다. 먼저 녹음을 진행해주세요.")
     elif not analysis:
@@ -550,29 +581,34 @@ if st.button("📤 결과 저장/전송", type="primary"):
         analysis["vhi_p"] = st.session_state.get("vhi_p", "")
         analysis["vhi_e"] = st.session_state.get("vhi_e", "")
 
+        # Internal label for research logging (not shown to participant)
         final_diag, _probs = predict_step2(
             STEP2_MODEL,
             float(analysis.get("intensity_db", np.nan)),
             float(analysis.get("sps", np.nan)),
         )
 
-        
-log_filename, sheet_ok, sheet_msg, email_ok, email_msg = send_email_and_log_sheet(
-    wav_path,
-    st.session_state.get("patient_info", {}),
-    analysis,
-    final_diag or ""
-)
+        log_filename, sheet_ok, sheet_msg, email_ok, email_msg = send_email_and_log_sheet(
+            wav_path,
+            st.session_state.get("patient_info", {}),
+            analysis,
+            final_diag or ""
+        )
 
-if sheet_ok and email_ok:
-    st.success("✅ 저장/전송을 완료했습니다.")
-elif email_ok and (not sheet_ok):
-    st.warning("⚠️ 이메일 전송은 성공했지만, 구글시트 저장은 실패했습니다.")
-elif sheet_ok and (not email_ok):
-    st.warning("⚠️ 구글시트 저장은 성공했지만, 이메일 전송은 실패했습니다.")
-else:
-    st.error("❌ 저장/전송에 실패했습니다. 아래 로그를 확인하세요.")
+        # Mark as sent only when BOTH email + sheet succeeded (prevents accidental duplicates)
+        if sheet_ok and email_ok and sub_key:
+            st.session_state["sent_submission_keys"].add(sub_key)
 
-st.write(f"- 저장 파일명: `{log_filename}`")
-st.write(f"- 구글시트: {'성공' if sheet_ok else '실패/생략'} · {sheet_msg}")
-st.write(f"- 이메일: {'성공' if email_ok else '실패/생략'} · {email_msg}")
+        if sheet_ok and email_ok:
+            st.success("✅ 저장/전송을 완료했습니다.")
+        elif email_ok and (not sheet_ok):
+            st.warning("⚠️ 이메일 전송은 성공했지만, 구글시트 저장은 실패했습니다.")
+        elif sheet_ok and (not email_ok):
+            st.warning("⚠️ 구글시트 저장은 성공했지만, 이메일 전송은 실패했습니다.")
+        else:
+            st.error("❌ 저장/전송에 실패했습니다. 아래 로그를 확인하세요.")
+
+        st.write(f"- 저장 파일명: `{log_filename}`")
+        st.write(f"- 구글시트: {'성공' if sheet_ok else '실패/생략'} · {sheet_msg}")
+        st.write(f"- 이메일: {'성공' if email_ok else '실패/생략'} · {email_msg}")
+
