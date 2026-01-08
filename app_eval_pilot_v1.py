@@ -167,21 +167,31 @@ except Exception as e:
 SHEET_NAME = st.secrets.get("sheet", {}).get("name", None)
 
 def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, final_diag: str):
+    """Send wav to research email and append a row to Google Sheet.
+    Returns: (log_filename, sheet_ok, sheet_msg, email_ok, email_msg)
+    """
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = str(patient_info.get("name", "participant")).replace(" ", "")
     log_filename = f"{safe_name}_{patient_info.get('age','')}_{patient_info.get('gender','')}_{timestamp}.wav"
 
     # --- Google Sheet ---
+    sheet_ok = False
     sheet_msg = ""
     if HAS_GSPREAD and ("gcp_service_account" in st.secrets) and (SHEET_NAME is not None):
         try:
             creds = service_account.Credentials.from_service_account_info(
                 st.secrets["gcp_service_account"],
-                scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+                scopes=[
+                    "https://www.googleapis.com/auth/spreadsheets",
+                    "https://www.googleapis.com/auth/drive",
+                ],
             )
             gc = gspread.authorize(creds)
             sh = gc.open(SHEET_NAME)
-            worksheet = sh.sheet1
+
+            # Use first worksheet by default (or configured name)
+            worksheet_name = st.secrets.get("sheet", {}).get("worksheet", None)
+            worksheet = sh.worksheet(worksheet_name) if worksheet_name else sh.sheet1
 
             header = [
                 "timestamp", "filename", "name", "age", "gender",
@@ -189,8 +199,11 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
                 "VHI-total", "VHI_F", "VHI_P", "VHI_E",
                 "Final diagnosis"
             ]
-            if not worksheet.row_values(1):
-                worksheet.append_row(header)
+
+            existing = worksheet.row_values(1)
+            if existing != header:
+                # Keep column order consistent. Insert header at row 1 if missing/mismatched.
+                worksheet.insert_row(header, 1)
 
             row = [
                 timestamp, log_filename,
@@ -200,13 +213,17 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
                 final_diag or ""
             ]
             worksheet.append_row(row)
-            sheet_msg = "구글시트 저장 완료"
+            sheet_ok = True
+            sheet_msg = "구글시트 저장 성공"
         except Exception as e:
+            sheet_ok = False
             sheet_msg = f"구글시트 저장 실패: {type(e).__name__}: {e}"
     else:
+        sheet_ok = False
         sheet_msg = "구글시트 저장 생략(Secrets 미설정)"
 
     # --- Email ---
+    email_ok = False
     email_msg = ""
     try:
         sender = st.secrets["email"]["sender"]
@@ -257,11 +274,16 @@ final_diagnosis(model): {final_diag}
         server.sendmail(sender, receiver, msg.as_string())
         server.quit()
 
-        email_msg = "이메일 전송 완료"
+        email_ok = True
+        email_msg = "이메일 전송 성공"
+    except KeyError:
+        email_ok = False
+        email_msg = "이메일 전송 생략(Secrets 미설정)"
     except Exception as e:
+        email_ok = False
         email_msg = f"이메일 전송 실패: {type(e).__name__}: {e}"
 
-    return log_filename, sheet_msg, email_msg
+    return log_filename, sheet_ok, sheet_msg, email_ok, email_msg
 
 # =========================
 # Consent gate (required)
@@ -534,14 +556,23 @@ if st.button("📤 결과 저장/전송", type="primary"):
             float(analysis.get("sps", np.nan)),
         )
 
-        log_filename, sheet_msg, email_msg = send_email_and_log_sheet(
-            wav_path,
-            st.session_state.get("patient_info", {}),
-            analysis,
-            final_diag or ""
-        )
+        
+log_filename, sheet_ok, sheet_msg, email_ok, email_msg = send_email_and_log_sheet(
+    wav_path,
+    st.session_state.get("patient_info", {}),
+    analysis,
+    final_diag or ""
+)
 
-        st.success("✅ 저장/전송을 완료했습니다.")
-        st.write(f"- 저장 파일명: `{log_filename}`")
-        st.write(f"- {sheet_msg}")
-        st.write(f"- {email_msg}")
+if sheet_ok and email_ok:
+    st.success("✅ 저장/전송을 완료했습니다.")
+elif email_ok and (not sheet_ok):
+    st.warning("⚠️ 이메일 전송은 성공했지만, 구글시트 저장은 실패했습니다.")
+elif sheet_ok and (not email_ok):
+    st.warning("⚠️ 구글시트 저장은 성공했지만, 이메일 전송은 실패했습니다.")
+else:
+    st.error("❌ 저장/전송에 실패했습니다. 아래 로그를 확인하세요.")
+
+st.write(f"- 저장 파일명: `{log_filename}`")
+st.write(f"- 구글시트: {'성공' if sheet_ok else '실패/생략'} · {sheet_msg}")
+st.write(f"- 이메일: {'성공' if email_ok else '실패/생략'} · {email_msg}")
