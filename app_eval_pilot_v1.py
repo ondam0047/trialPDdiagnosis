@@ -59,6 +59,27 @@ def make_submission_key(wav_path: str, patient_info: dict) -> str:
 
 if "sent_submission_keys" not in st.session_state:
     st.session_state["sent_submission_keys"] = set()
+
+def reset_for_new_evaluation():
+    """Reset state for a brand-new participant/evaluation (keeps app running without refreshing the page)."""
+    keys_to_clear = [
+        "enrolled", "show_instructions", "patient_info",
+        "wav_path", "analysis",
+        "vhi_total", "vhi_f", "vhi_p", "vhi_e",
+    ]
+    for k in keys_to_clear:
+        if k in st.session_state:
+            del st.session_state[k]
+    # Clear VHI responses
+    for i in range(1, 11):
+        kk = f"vhi_q{i}"
+        if kk in st.session_state:
+            del st.session_state[kk]
+    # Allow re-send keys to remain; they are recording-specific.
+    st.session_state["enrolled"] = False
+    st.session_state["show_instructions"] = False
+    st.rerun()
+
 st.title("🧠 파킨슨병(PD) 음성 평가(평가판)")
 
 # =========================
@@ -210,7 +231,8 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
     """
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = str(patient_info.get("name", "participant")).replace(" ", "")
-    log_filename = f"{safe_name}_{patient_info.get('age','')}_{patient_info.get('gender','')}_{timestamp}.wav"
+    log_prefix = "TEST_" if patient_info.get("is_test") else ""
+    filename = f"{prefix}{safe_name}_{patient_info.get('age','')}_{patient_info.get('gender','')}_{timestamp}.wav"
 
     # --- Google Sheet ---
     sheet_ok = False
@@ -348,6 +370,56 @@ final_diagnosis(model): {final_diag}
 
     return log_filename, sheet_ok, sheet_msg, email_ok, email_msg
 
+# -------------------------
+# Duplicate participation guard (Google Sheet-based, best-effort)
+# -------------------------
+KST = datetime.timezone(datetime.timedelta(hours=9))
+
+def _kst_now() -> datetime.datetime:
+    return datetime.datetime.now(tz=KST)
+
+def _get_sheet_worksheet():
+    """Return a gspread worksheet object if configured; otherwise raise."""
+    if not (HAS_GSPREAD and ("gcp_service_account" in st.secrets) and (SHEET_NAME is not None)):
+        raise RuntimeError("Sheets secrets not configured")
+    svc_info = dict(st.secrets["gcp_service_account"])
+    if "private_key" in svc_info and isinstance(svc_info["private_key"], str):
+        svc_info["private_key"] = svc_info["private_key"].replace("\\n", "\n")
+    creds = service_account.Credentials.from_service_account_info(
+        svc_info,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ],
+    )
+    gc = gspread.authorize(creds)
+    sh = gc.open(SHEET_NAME)
+    worksheet_name = st.secrets.get("sheet", {}).get("worksheet", None)
+    return sh.worksheet(worksheet_name) if worksheet_name else sh.sheet1
+
+def check_duplicate_participation(name: str, age: int, gender: str):
+    """Block if same (name,age,gender) already submitted today (KST). Returns (is_duplicate, message)."""
+    try:
+        ws = _get_sheet_worksheet()
+        today = _kst_now().strftime("%Y%m%d")
+        # Read minimal columns: timestamp, filename, name, age, gender
+        rows = ws.get("A2:E")  # list[list[str]]
+        name0 = str(name).strip()
+        age0 = str(age).strip()
+        gender0 = str(gender).strip()
+        for r in rows:
+            if len(r) < 5:
+                continue
+            ts, _fn, nm, ag, gd = r[0], r[1], r[2], r[3], r[4]
+            if str(ts).strip()[:8] != today:
+                continue
+            if str(nm).strip() == name0 and str(ag).strip() == age0 and str(gd).strip() == gender0:
+                return True, f"동일한 참여자 정보로 오늘({today}) 이미 제출 기록이 있어 **중복 참여가 제한**됩니다."
+        return False, "중복 참여 없음"
+    except Exception as e:
+        # Best-effort: if check can't run, do not block.
+        return False, f"중복 참여 확인 생략: {type(e).__name__}: {e}"
+
 # =========================
 # Consent gate (required)
 # =========================
@@ -361,7 +433,6 @@ def consent_block():
     st.caption("아래 항목은 필수입니다. 동의하지 않으면 평가를 진행할 수 없습니다.")
 
     with st.form("consent_form", clear_on_submit=False):
-        consent = st.checkbox("본 연구(온라인 음성 평가) 참여에 동의합니다. (필수)")
         name = st.text_input("이름(실명 또는 연구ID) *", value="")
         age = st.number_input("나이 *", min_value=1, max_value=120, value=60, step=1)
         gender = st.selectbox("성별 *", ["남", "여"])
@@ -370,8 +441,13 @@ def consent_block():
         hearing_issue = st.selectbox("청각 문제(난청/보청기/이명 등) 여부 *", ["없음", "있음", "모름"])
         device = st.selectbox("녹음 기기 *", ["노트북", "핸드폰", "태블릿", "외장 마이크/레코더", "기타"])
         mic = st.text_input("마이크 정보(선택)", value="")
+        # --- Research team test mode (bypass duplicate guard) ---
+        with st.expander("연구팀 테스트(중복 참여 허용)", expanded=False):
+            tester_mode = st.checkbox("연구팀/테스트 모드로 진행", value=False)
+            tester_code = st.text_input("테스트 코드(관리자용)", type="password", value="")
         dist_ok = st.checkbox("녹음 기기(마이크)와의 거리가 약 30cm임을 확인했습니다. (필수)")
         read_ok = st.checkbox("사용 방법 안내를 읽고 이해했습니다. (필수)")
+        consent = st.checkbox("본 연구(온라인 음성 평가) 참여에 동의합니다. (필수)")
         submitted = st.form_submit_button("✅ 동의하고 시작하기")
 
     if submitted:
@@ -388,10 +464,42 @@ def consent_block():
             st.error(" / ".join(problems))
             return
 
+        # Validate test mode code if enabled (research team)
+        is_tester = False
+        if 'tester_mode' in locals() and tester_mode:
+            admin_code = None
+            try:
+                if "admin" in st.secrets and "bypass_code" in st.secrets["admin"]:
+                    admin_code = str(st.secrets["admin"]["bypass_code"]).strip()
+            except Exception:
+                admin_code = None
+
+            if not admin_code:
+                st.error("연구팀 테스트 모드를 사용하려면 관리자 코드가 설정되어 있어야 합니다. (Streamlit Secrets의 [admin].bypass_code)")
+                return
+            if str(tester_code).strip() != admin_code:
+                st.error("테스트 코드가 올바르지 않습니다.")
+                return
+            is_tester = True
+
+# Duplicate participation guard (best-effort; blocks when a duplicate is detected)
+if is_tester:
+    st.info("🧪 **연구팀 테스트 모드**: 중복 참여 제한을 적용하지 않습니다.")
+else:
+    is_dup, dup_msg = check_duplicate_participation(str(name).strip(), int(age), gender)
+    if is_dup:
+        st.error(f"⚠️ {dup_msg}")
+        return
+    else:
+        # Show non-blocking status only if we had to skip the check due to config
+        if str(dup_msg).startswith("중복 참여 확인 생략"):
+            st.warning(f"ℹ️ {dup_msg}")
+
         st.session_state.enrolled = True
         st.session_state.show_instructions = True
         st.session_state.patient_info = {
             "name": str(name).strip(),
+            "is_test": bool(is_tester),
             "age": int(age),
             "gender": gender,
             "diag_years": int(diag_years),
@@ -406,21 +514,21 @@ def consent_block():
 if not st.session_state.enrolled:
     st.info("""📌 연구 목적(요약)
 
-안녕하세요. 본 연구는 대림대학교 언어치료학과에서 파킨슨병 진단을 받은 분들의 낭독 음성을 수집하여, 음향학적 지표(평균 음도, 음도 범위, 평균 강도, 말속도)와 자가지각 설문(VHI-10)이
-어떤 양상으로 나타나는지 분석하고, 이를 바탕으로 향후 평가 도구 및 중재(훈련/디지털 치료) 개발에 활용하기 위해 진행됩니다.
+안녕하세요. 본 연구는 **대림대학교 언어치료학과**에서 **파킨슨병(PD)** 진단을 받은 분들의 **낭독 음성**을 수집하여, **음향학적 지표(평균 음도, 음도 범위, 평균 강도, 말속도)**와 **자가지각 설문(VHI-10)**이 어떤 양상으로 나타나는지 분석하고, 이를 바탕으로 향후 **평가 도구** 및 **중재(훈련/디지털 치료)** 개발에 활용하기 위해 진행됩니다.
 
-연구에 참여하실 경우, 
+연구에 참여하실 경우,
 
-평가 과정에서 입력하신 이름/나이/성별과 녹음된 음성, 설문 결과는 연구 목적에 한해 사용되며,
-연구팀이 자료를 검토할 수 있도록 안전한 방식으로 저장됩니다. 연구 참여는 자발적이며, 원하실 경우 언제든 중단하실 수 있습니다.
+평가 과정에서 입력하신 **이름/나이/성별**과 **녹음된 음성**, **설문 결과**는 연구 목적에 한해 사용되며, 연구팀이 자료를 검토할 수 있도록 **안전한 방식으로 저장**됩니다. 연구 참여는 자발적이며, 원하실 경우 언제든 중단하실 수 있습니다.
 
 📌 사용 방법(요약)
 
-1) 글자 크기를 조절하면 낭독 문단의 글자 크기가 변경됩니다.
-2) 녹음 기기와의 거리는 약 30cm를 유지해주세요.
-3) 너무 잘 읽으려고 하지도, 일부러 안 좋게 읽으려고 하지도 말고 ‘편안하게’ 읽어주세요.
-4) [녹음 시작] 후 낭독 → [정지] → [녹음된 음성 분석]을 눌러주세요.
-5) 마지막으로 VHI-10을 작성하고 [결과 저장/전송]을 눌러주세요.""")
+1) 글자 크기를 조절하면 낭독 문단의 글자 크기가 변경됩니다.  
+2) 녹음 기기(마이크)와의 거리는 **약 30cm**를 유지해주세요.  
+3) 너무 잘 읽으려고 하지도, 일부러 안 좋게 읽으려고 하지도 말고 **‘편안하게’** 읽어주세요.  
+4) **[녹음 시작] → 낭독 → [정지] → [녹음된 음성 분석]** 순서로 진행합니다.  
+5) 마지막으로 **VHI-10**을 작성하고 **[결과 저장/전송]**을 눌러주세요.  
+6) 본 연구는 동일 참여자의 **중복 참여가 제한**될 수 있어, 이미 참여하신 경우 **재참여가 어려울 수 있습니다.**
+""")
     consent_block()
     st.stop()
 
@@ -434,14 +542,19 @@ with st.sidebar:
     if pinfo.get("mic"):
         st.write(f"- 마이크: **{pinfo.get('mic')}**")
 
+    st.markdown("---")
+    if st.button("🆕 새 평가 시작", help="현재 입력/녹음/설문 내용을 초기화합니다."):
+        reset_for_new_evaluation()
+
 def _instructions_body():
     st.markdown("### 📌 평가 사용방법")
     st.markdown(
         "- 글자 크기를 수정하면 낭독 문단의 글자 크기가 변경됩니다.\n"
         "- 녹음 기기(마이크)와의 거리는 **약 30cm**를 유지해주세요.\n"
-        "- 너무 잘 읽으려고 하지도, 일부러 안 좋게 읽지 마시고, **편안하게** 읽어주세요.\n"
+        "- 너무 잘 읽으려고 하지도, 일부러 안 좋게 읽으려고 하지도 말고 **편안하게** 읽어주세요.\n"
         "- **[녹음 시작] → 낭독 → [정지] → [녹음된 음성 분석]** 순서로 진행합니다.\n"
-        "- 분석 후 **VHI-10 작성 → [결과 저장/전송]**을 눌러주세요."
+        "- 분석 후 **VHI-10 작성 → [결과 저장/전송]**을 눌러주세요.\n"
+        "- 본 연구는 동일 참여자의 **중복 참여가 제한**될 수 있어, 이미 참여하신 경우 **재참여가 어려울 수 있습니다.**"
     )
     if st.button("닫기"):
         st.session_state.show_instructions = False
@@ -692,7 +805,7 @@ if st.button("📤 결과 저장/전송", type="primary", disabled=already_sent)
             st.session_state["sent_submission_keys"].add(sub_key)
 
         if sheet_ok and email_ok:
-            st.success("✅ 저장/전송을 완료했습니다.")
+            st.success("✅ 저장/전송을 완료했습니다.\n\n**향후 연구에 도움이 될 수 있도록 참여해주셔서 감사합니다.**")
         elif email_ok and (not sheet_ok):
             st.warning("⚠️ 이메일 전송은 성공했지만, 구글시트 저장은 실패했습니다.")
         elif sheet_ok and (not email_ok):
