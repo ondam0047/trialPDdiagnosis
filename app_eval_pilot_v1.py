@@ -778,7 +778,7 @@ def _audio_recorder_one_button(key: str = "recorder") -> dict | None:
 })();
 </script>
 '''
-    return components.html(html, height=180, key=key)
+    return components.html(html, height=180)
 
 rec = _audio_recorder_one_button(key="one_button_recorder")
 
