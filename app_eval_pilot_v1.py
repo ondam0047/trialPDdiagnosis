@@ -357,14 +357,19 @@ def consent_block():
         st.rerun()
 
 if not st.session_state.enrolled:
-    st.info(
-        "📌 사용 방법(요약)\n\n"
-        "1) 글자 크기를 조절하면 낭독 문단의 글자 크기가 변경됩니다.\n"
-        "2) 녹음 기기와의 거리는 약 30cm를 유지해주세요.\n"
-        "3) 너무 잘 읽으려고 하지도, 일부러 안 좋게 읽으려고 하지도 말고 ‘편안하게’ 읽어주세요.\n"
-        "4) [녹음 시작] 후 낭독 → [정지] → [녹음된 음성 분석]을 눌러주세요.\n"
-        "5) 마지막으로 VHI-10을 작성하고 [결과 저장/전송]을 눌러주세요."
-    )
+    st.info("""📌 연구 목적(요약)
+
+본 연구는 파킨슨병(PD) 진단을 받은 분들의 낭독 음성을 수집하여,
+음향학적 지표(평균 음도, 음도 범위, 평균 강도, 말속도)와 자가지각(VHI-10)을 바탕으로
+음성 특성의 하위 유형을 탐색하고, 향후 평가 도구 및 중재(디지털 치료/훈련) 개발에 활용하기 위해 수행합니다.
+
+📌 사용 방법(요약)
+
+1) 글자 크기를 조절하면 낭독 문단의 글자 크기가 변경됩니다.
+2) 녹음 기기와의 거리는 약 30cm를 유지해주세요.
+3) 너무 잘 읽으려고 하지도, 일부러 안 좋게 읽으려고 하지도 말고 ‘편안하게’ 읽어주세요.
+4) [녹음 시작] 후 낭독 → [정지] → [녹음된 음성 분석]을 눌러주세요.
+5) 마지막으로 VHI-10을 작성하고 [결과 저장/전송]을 눌러주세요.""")
     consent_block()
     st.stop()
 
@@ -523,16 +528,16 @@ VHI_LABELS = {
 }
 
 with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
-    q1 = st.radio("1. 목소리 때문에 전화 통화가 어렵다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q1")
-    q2 = st.radio("2. 사람들이 내 목소리를 잘 못 알아듣는다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q2")
-    q3 = st.radio("3. 목소리 때문에 모임에서 말을 덜 하게 된다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q3")
-    q4 = st.radio("4. 목소리 때문에 대화가 불편하다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q4")
-    q5 = st.radio("5. 목소리 때문에 사회생활이 제한된다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q5")
-    q6 = st.radio("6. 목소리 때문에 가족/친구와의 대화가 어렵다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q6")
-    q7 = st.radio("7. 목소리 때문에 스트레스를 받는다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q7")
-    q8 = st.radio("8. 내 목소리가 나 자신을 드러내지 못한다고 느낀다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q8")
-    q9 = st.radio("9. 목소리 때문에 우울/불안해진다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q9")
-    q10 = st.radio("10. 목소리 때문에 화가 난다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q10")
+    q1 = st.radio("1. 목소리 때문에 상대방이 내 말을 알아듣기 힘들어한다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q1")
+    q2 = st.radio("2. 시끄러운 곳에서는 사람들이 내 말을 이해하기 어려워한다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q2")
+    q3 = st.radio("3. 사람들이 나에게 목소리가 왜 그러냐고 묻는다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q3")
+    q4 = st.radio("4. 목소리를 내려면 힘을 주어야 나오는 것 같다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q4")
+    q5 = st.radio("5. 음성문제로 개인 생활과 사회생활에 제한을 받는다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q5")
+    q6 = st.radio("6. 목소리가 언제쯤 맑게 잘 나올지 알 수가 없다(예측이 어렵다).", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q6")
+    q7 = st.radio("7. 내 목소리 때문에 대화에 끼지 못하여 소외감을 느낀다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q7")
+    q8 = st.radio("8. 음성 문제로 인해 소득(수입)에 감소가 생긴다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q8")
+    q9 = st.radio("9. 내 목소리 문제로 속이 상한다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q9")
+    q10 = st.radio("10. 음성 문제가 장애로(핸디캡으로) 여겨진다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q10")
 
 vhi_f = int(q1 + q2 + q5 + q7 + q8)
 vhi_p = int(q3 + q4 + q6)
