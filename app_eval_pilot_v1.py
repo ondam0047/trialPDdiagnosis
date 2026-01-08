@@ -624,172 +624,77 @@ st.markdown(
 )
 
 # --- One-button audio recorder (start/stop) ---
-def _audio_recorder_one_button(key: str = "recorder") -> dict | None:
-    """Return dict {'wav_base64': str, 'sample_rate': int} when recording stops."""
-    html = r'''
-<div style="display:flex; flex-direction:column; gap:10px; font-family: sans-serif;">
-  <button id="recBtn"
-    style="font-size:20px; font-weight:700; padding:12px 16px; border-radius:12px; border:1px solid rgba(0,0,0,0.2); cursor:pointer;">
-    🔴 녹음 시작
-  </button>
-  <div id="status" style="font-size:14px; opacity:0.85;">버튼을 눌러 녹음을 시작하세요.</div>
-</div>
+# We use a proper Streamlit component so that recorded bytes can be returned to Python.
+# If this fails on Streamlit Cloud, add this line to requirements.txt:
+#   streamlit-mic-recorder
+try:
+    from streamlit_mic_recorder import mic_recorder
+    HAS_MIC_RECORDER = True
+except ModuleNotFoundError:
+    HAS_MIC_RECORDER = False
 
-<script>
-(function() {
-  const sendValue = (value) => {
-    const msg = {isStreamlitMessage: true, type: "streamlit:setComponentValue", value: value};
-    window.parent.postMessage(msg, "*");
-  };
-  const setHeight = (height) => {
-    const msg = {isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: height};
-    window.parent.postMessage(msg, "*");
-  };
-  setHeight(170);
+def _plot_waveform(wav_bytes: bytes):
+    """Lightweight waveform preview (downsampled)."""
+    import wave
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            fr = wf.getframerate()
+            n_frames = wf.getnframes()
+            frames = wf.readframes(n_frames)
+        if sampwidth != 2:
+            # fall back: just skip waveform if sample width is unexpected
+            st.caption("파형 미리보기(참고): 현재 파일 형식에서는 파형을 표시할 수 없습니다.")
+            return
+        x = np.frombuffer(frames, dtype=np.int16)
+        if n_channels > 1:
+            x = x[::n_channels]
+        # normalize
+        x = x.astype(np.float32) / 32768.0
+        # downsample for speed
+        max_points = 4000
+        if x.size > max_points:
+            idx = np.linspace(0, x.size - 1, max_points).astype(int)
+            x = x[idx]
+        dfw = pd.DataFrame({"amplitude": x})
+        st.line_chart(dfw, height=150)
+    except Exception:
+        st.caption("파형 미리보기(참고): 표시할 수 없습니다.")
 
-  const recBtn = document.getElementById("recBtn");
-  const status = document.getElementById("status");
+# Show previous waveform BEFORE starting a new recording (helps users confirm something exists)
+if st.session_state.get("wav_bytes"):
+    st.markdown("**이전 녹음 파형(참고)**")
+    _plot_waveform(st.session_state["wav_bytes"])
+    st.audio(st.session_state["wav_bytes"], format="audio/wav")
 
-  let recording = false;
-  let audioContext = null;
-  let processor = null;
-  let source = null;
-  let stream = null;
-  let chunks = [];
-  let sampleRate = 44100;
-  let t0 = null;
-  let timer = null;
+if not HAS_MIC_RECORDER:
+    st.error(
+        "필수 패키지(streamlit-mic-recorder)가 설치되지 않아 녹음을 사용할 수 없습니다.\n\n"
+        "Streamlit Cloud를 사용 중이면, requirements.txt에 아래 한 줄을 추가한 뒤 재배포하세요:\n"
+        "- streamlit-mic-recorder"
+    )
+    st.stop()
 
-  function mergeChunks(chunks) {
-    let length = 0;
-    for (const c of chunks) length += c.length;
-    const result = new Float32Array(length);
-    let offset = 0;
-    for (const c of chunks) { result.set(c, offset); offset += c.length; }
-    return result;
-  }
-
-  function floatTo16BitPCM(output, offset, input) {
-    for (let i = 0; i < input.length; i++, offset += 2) {
-      let s = Math.max(-1, Math.min(1, input[i]));
-      output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    }
-  }
-
-  function writeString(view, offset, string) {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
-  }
-
-  function encodeWAV(samples, sampleRate) {
-    const buffer = new ArrayBuffer(44 + samples.length * 2);
-    const view = new DataView(buffer);
-
-    writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + samples.length * 2, true);
-    writeString(view, 8, 'WAVE');
-    writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    writeString(view, 36, 'data');
-    view.setUint32(40, samples.length * 2, true);
-    floatTo16BitPCM(view, 44, samples);
-
-    return new Uint8Array(buffer);
-  }
-
-  async function startRecording() {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (e) {
-      status.textContent = "마이크 권한이 필요합니다. 브라우저에서 마이크 접근을 허용해주세요.";
-      return;
-    }
-    chunks = [];
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    sampleRate = audioContext.sampleRate;
-
-    source = audioContext.createMediaStreamSource(stream);
-    processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-    const gain = audioContext.createGain();
-    gain.gain.value = 0.0;
-
-    processor.onaudioprocess = (e) => {
-      if (!recording) return;
-      const input = e.inputBuffer.getChannelData(0);
-      chunks.push(new Float32Array(input));
-    };
-
-    source.connect(processor);
-    processor.connect(gain);
-    gain.connect(audioContext.destination);
-
-    recording = true;
-    recBtn.textContent = "⏹️ 녹음 정지";
-    t0 = Date.now();
-    timer = setInterval(() => {
-      const sec = Math.floor((Date.now() - t0) / 1000);
-      status.textContent = `녹음 중... ${sec}초 (다시 누르면 정지합니다)`;
-    }, 250);
-  }
-
-  async function stopRecording() {
-    recording = false;
-    recBtn.textContent = "🔴 녹음 시작";
-    clearInterval(timer);
-    status.textContent = "녹음을 처리 중입니다...";
-
-    try {
-      if (processor) processor.disconnect();
-      if (source) source.disconnect();
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      if (audioContext) await audioContext.close();
-    } catch (e) {}
-
-    const samples = mergeChunks(chunks);
-    const wavBytes = encodeWAV(samples, sampleRate);
-
-    // base64 encode
-    let binary = '';
-    const chunkSize = 0x8000;
-    for (let i = 0; i < wavBytes.length; i += chunkSize) {
-      binary += String.fromCharCode.apply(null, wavBytes.subarray(i, i + chunkSize));
-    }
-    const b64 = btoa(binary);
-
-    status.textContent = "✅ 녹음이 완료되었습니다. 아래에서 재생 후 [녹음된 음성 분석]을 진행하세요.";
-    sendValue({wav_base64: b64, sample_rate: sampleRate});
-  }
-
-  recBtn.addEventListener("click", async () => {
-    if (!recording) {
-      await startRecording();
-    } else {
-      await stopRecording();
-    }
-  });
-})();
-</script>
-'''
-    return components.html(html, height=180)
-
-rec = _audio_recorder_one_button(key="one_button_recorder")
+rec = mic_recorder(
+    start_prompt="🔴 녹음 시작",
+    stop_prompt="⏹️ 녹음 정지",
+    just_once=False,
+    key="one_button_recorder",
+)
 
 TEMP_WAV = "temp_eval.wav"
-if rec and isinstance(rec, dict) and rec.get("wav_base64"):
+if rec and isinstance(rec, dict) and rec.get("bytes"):
     try:
-        data = base64.b64decode(rec["wav_base64"])
+        data = rec["bytes"]
+        # Save to a predictable temp wav (overwrite is OK for this pilot flow)
         with open(TEMP_WAV, "wb") as f:
             f.write(data)
         st.session_state["wav_path"] = str(Path(TEMP_WAV).resolve())
         st.session_state["wav_bytes"] = data
+        # New recording -> clear previous analysis (so results match the latest audio)
+        if "analysis" in st.session_state:
+            del st.session_state["analysis"]
     except Exception as e:
         st.error(f"녹음 데이터 처리 중 오류가 발생했습니다: {e}")
 
