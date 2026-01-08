@@ -532,9 +532,6 @@ st.markdown("---")
 st.header("3. VHI-10 입력")
 st.caption("파킨슨을 진단 받은 후, 본인의 목소리에 대해 느끼는 대로 설문지를 작성해주세요.")
 
-.vhi-q{
-  font-size: 18px;
-  font-weight: 600;
 vhi_opts = [0, 1, 2, 3, 4]
 VHI_LABELS = {
     0: "전혀 그렇지 않다",
