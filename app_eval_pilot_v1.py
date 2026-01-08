@@ -216,23 +216,38 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
             worksheet = sh.worksheet(worksheet_name) if worksheet_name else sh.sheet1
 
             header = [
-                "timestamp", "filename", "name", "age", "gender",
+                "timestamp", "filename",
+                "name", "age", "gender",
+                "diag_years", "dopa_meds", "hearing_issue", "device",
                 "F0", "range", "intensity_dB", "SPS",
                 "VHI-total", "VHI_F", "VHI_P", "VHI_E",
-                "Final diagnosis"
+                "Final diagnosis",
             ]
 
             existing = worksheet.row_values(1)
             if existing != header:
-                # Keep column order consistent. Insert header at row 1 if missing/mismatched.
-                worksheet.insert_row(header, 1)
+                # Overwrite row1 to keep header consistent (avoid multiple header rows).
+                worksheet.update("A1", [header])
 
             row = [
-                timestamp, log_filename,
-                patient_info.get("name", ""), patient_info.get("age", ""), patient_info.get("gender", ""),
-                analysis.get("f0", ""), analysis.get("range", ""), analysis.get("intensity_db", ""), analysis.get("sps", ""),
-                analysis.get("vhi_total", ""), analysis.get("vhi_f", ""), analysis.get("vhi_p", ""), analysis.get("vhi_e", ""),
-                final_diag or ""
+                timestamp,
+                log_filename,
+                patient_info.get("name", ""),
+                patient_info.get("age", ""),
+                patient_info.get("gender", ""),
+                patient_info.get("diag_years", ""),
+                patient_info.get("dopa_meds", ""),
+                patient_info.get("hearing_issue", ""),
+                patient_info.get("device", ""),
+                analysis.get("f0", ""),
+                analysis.get("range", ""),
+                analysis.get("intensity_db", ""),
+                analysis.get("sps", ""),
+                analysis.get("vhi_total", ""),
+                analysis.get("vhi_f", ""),
+                analysis.get("vhi_p", ""),
+                analysis.get("vhi_e", ""),
+                final_diag or "",
             ]
             worksheet.append_row(row)
             sheet_ok = True
@@ -357,9 +372,9 @@ def consent_block():
             "name": str(name).strip(),
             "age": int(age),
             "gender": gender,
-"diag_years": int(diag_years),
-"dopa_meds": dopa_meds,
-"hearing_issue": hearing_issue,
+            "diag_years": int(diag_years),
+            "dopa_meds": dopa_meds,
+            "hearing_issue": hearing_issue,
             "device": device,
             "mic": str(mic).strip(),
             "distance_ok": bool(dist_ok),
@@ -532,6 +547,9 @@ st.markdown("---")
 st.header("3. VHI-10 입력")
 st.caption("파킨슨을 진단 받은 후, 본인의 목소리에 대해 느끼는 대로 설문지를 작성해주세요.")
 
+# 문항 글자 크기(사용자 조절)
+vhi_q_fs = st.slider("🔠 VHI 문항 글자 크기", 14, 30, 18, key="vhi_q_fs")
+
 vhi_opts = [0, 1, 2, 3, 4]
 VHI_LABELS = {
     0: "전혀 그렇지 않다",
@@ -541,18 +559,51 @@ VHI_LABELS = {
     4: "항상 그렇다",
 }
 
-with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
-    q1 = st.radio("1. 목소리 때문에 상대방이 내 말을 알아듣기 힘들어한다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q1")
-    q2 = st.radio("2. 시끄러운 곳에서는 사람들이 내 말을 이해하기 어려워한다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q2")
-    q3 = st.radio("3. 사람들이 나에게 목소리가 왜 그러냐고 묻는다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q3")
-    q4 = st.radio("4. 목소리를 내려면 힘을 주어야 나오는 것 같다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q4")
-    q5 = st.radio("5. 음성문제로 개인 생활과 사회생활에 제한을 받는다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q5")
-    q6 = st.radio("6. 목소리가 언제쯤 맑게 잘 나올지 알 수가 없다(예측이 어렵다).", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q6")
-    q7 = st.radio("7. 내 목소리 때문에 대화에 끼지 못하여 소외감을 느낀다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q7")
-    q8 = st.radio("8. 음성 문제로 인해 소득(수입)에 감소가 생긴다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q8")
-    q9 = st.radio("9. 내 목소리 문제로 속이 상한다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q9")
-    q10 = st.radio("10. 음성 문제가 장애로(핸디캡으로) 여겨진다.", vhi_opts, format_func=lambda x: f"{x} - {VHI_LABELS[x]}", key="vhi_q10")
 
+# --- VHI item display (bigger question text) ---
+st.markdown(
+    f"""
+    <style>
+      .vhi-q{{
+        font-size: {int(vhi_q_fs)}px;
+        font-weight: 600;
+        line-height: 1.35;
+        margin: 14px 0 6px 0;
+      }}
+      .vhi-help{{
+        font-size: 13px;
+        color: #666;
+        margin: 0 0 8px 0;
+      }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+def vhi_item(num: int, text: str, key: str) -> int:
+    st.markdown(f"<div class='vhi-q'>{num}. {html.escape(text)}</div>", unsafe_allow_html=True)
+    return int(
+        st.radio(
+            label=f"vhi_{num}",
+            options=vhi_opts,
+            index=0,
+            format_func=lambda x: f"{x} - {VHI_LABELS[x]}",
+            key=key,
+            label_visibility="collapsed",
+        )
+    )
+
+with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
+    q1 = vhi_item(1, "목소리 때문에 상대방이 내 말을 알아듣기 힘들어한다.", "vhi_q1")
+    q2 = vhi_item(2, "시끄러운 곳에서는 사람들이 내 말을 이해하기 어려워한다.", "vhi_q2")
+    q3 = vhi_item(3, "사람들이 나에게 목소리가 왜 그러냐고 묻는다.", "vhi_q3")
+    q4 = vhi_item(4, "목소리를 내려면 힘을 주어야 나오는 것 같다.", "vhi_q4")
+    q5 = vhi_item(5, "음성문제로 개인 생활과 사회생활에 제한을 받는다.", "vhi_q5")
+    q6 = vhi_item(6, "목소리가 언제쯤 맑게 잘 나올지 알 수가 없다(예측이 어렵다).", "vhi_q6")
+    q7 = vhi_item(7, "내 목소리 때문에 대화에 끼지 못하여 소외감을 느낀다.", "vhi_q7")
+    q8 = vhi_item(8, "음성 문제로 인해 소득(수입)에 감소가 생긴다.", "vhi_q8")
+    q9 = vhi_item(9, "내 목소리 문제로 속이 상한다.", "vhi_q9")
+    q10 = vhi_item(10, "음성 문제가 장애로(핸디캡으로) 여겨진다.", "vhi_q10")
 vhi_f = int(q1 + q2 + q5 + q7 + q8)
 vhi_p = int(q3 + q4 + q6)
 vhi_e = int(q9 + q10)
