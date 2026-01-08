@@ -462,11 +462,11 @@ def consent_block():
             problems.append("사용 방법 안내 확인이 필요합니다.")
         if problems:
             st.error(" / ".join(problems))
-            return
+            st.stop()
 
         # Validate test mode code if enabled (research team)
         is_tester = False
-        if 'tester_mode' in locals() and tester_mode:
+        if tester_mode:
             admin_code = None
             try:
                 if "admin" in st.secrets and "bypass_code" in st.secrets["admin"]:
@@ -476,24 +476,24 @@ def consent_block():
 
             if not admin_code:
                 st.error("연구팀 테스트 모드를 사용하려면 관리자 코드가 설정되어 있어야 합니다. (Streamlit Secrets의 [admin].bypass_code)")
-                return
+                st.stop()
             if str(tester_code).strip() != admin_code:
                 st.error("테스트 코드가 올바르지 않습니다.")
-                return
+                st.stop()
             is_tester = True
 
-# Duplicate participation guard (best-effort; blocks when a duplicate is detected)
-if is_tester:
-    st.info("🧪 **연구팀 테스트 모드**: 중복 참여 제한을 적용하지 않습니다.")
-else:
-    is_dup, dup_msg = check_duplicate_participation(str(name).strip(), int(age), gender)
-    if is_dup:
-        st.error(f"⚠️ {dup_msg}")
-        return
-    else:
-        # Show non-blocking status only if we had to skip the check due to config
-        if str(dup_msg).startswith("중복 참여 확인 생략"):
-            st.warning(f"ℹ️ {dup_msg}")
+        # Duplicate participation guard (best-effort; blocks when a duplicate is detected)
+        if is_tester:
+            st.info("🧪 **연구팀 테스트 모드**: 중복 참여 제한을 적용하지 않습니다.")
+        else:
+            is_dup, dup_msg = check_duplicate_participation(str(name).strip(), int(age), gender)
+            if is_dup:
+                st.error(f"⚠️ {dup_msg}")
+                st.stop()
+            else:
+                # Show non-blocking status only if we had to skip the check due to config
+                if str(dup_msg).startswith("중복 참여 확인 생략"):
+                    st.warning(f"ℹ️ {dup_msg}")
 
         st.session_state.enrolled = True
         st.session_state.show_instructions = True
