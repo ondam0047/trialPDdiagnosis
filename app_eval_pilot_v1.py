@@ -16,6 +16,7 @@ except ModuleNotFoundError as e:
     )
     st.stop()
 import numpy as np
+import math
 import pandas as pd
 import os
 import datetime
@@ -183,6 +184,26 @@ except Exception as e:
 # =========================
 SHEET_NAME = st.secrets.get("sheet", {}).get("name", None)
 
+
+def _json_safe_value(v):
+    """Convert values to JSON/GSheets-safe primitives (avoid NaN/Inf)."""
+    if v is None:
+        return ""
+    # numpy scalars
+    if isinstance(v, (np.generic,)):
+        v = v.item()
+    if isinstance(v, (float,)):
+        if (not math.isfinite(v)) or math.isnan(v):
+            return ""
+        return float(v)
+    if isinstance(v, (int, bool)):
+        return v
+    # allow short strings as-is
+    return str(v)
+
+def _json_safe_row(row):
+    return [_json_safe_value(v) for v in row]
+
 def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, final_diag: str):
     """Send wav to research email and append a row to Google Sheet.
     Returns: (log_filename, sheet_ok, sheet_msg, email_ok, email_msg)
@@ -249,6 +270,7 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
                 analysis.get("vhi_e", ""),
                 final_diag or "",
             ]
+            row = _json_safe_row(row)
             worksheet.append_row(row)
             sheet_ok = True
             sheet_msg = "구글시트 저장 성공"
