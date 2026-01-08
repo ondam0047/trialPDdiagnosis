@@ -48,7 +48,11 @@ st.set_page_config(page_title="PD 음성 평가(평가판)", layout="wide")
 # Anchor for programmatic scrolling
 st.markdown('<div id="top"></div>', unsafe_allow_html=True)
 if st.session_state.get("scroll_to_top", False):
-    components.html("<script>window.scrollTo(0,0);</script>", height=0)
+    components.html("""<script>
+const el = window.parent.document.getElementById("top");
+if(el){ el.scrollIntoView({behavior: "auto", block: "start"}); }
+else{ window.parent.scrollTo(0,0); }
+</script>""", height=0)
     st.session_state.scroll_to_top = False
 
 
