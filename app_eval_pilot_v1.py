@@ -1,7 +1,20 @@
 
 import streamlit as st
-import parselmouth
-from parselmouth.praat import call
+
+# NOTE: This app requires Praat-Parselmouth for F0/Intensity/Pitch-range extraction.
+# Streamlit Cloud will raise ModuleNotFoundError unless you add it to requirements.txt:
+#   praat-parselmouth
+try:
+    import parselmouth
+    from parselmouth.praat import call
+except ModuleNotFoundError as e:
+    st.error(
+        "필수 패키지(parselmouth)가 설치되지 않아 실행할 수 없습니다.\n\n"
+        "Streamlit Cloud를 사용 중이면, GitHub 레포에 requirements.txt를 만들고 아래 한 줄을 추가한 뒤 재배포하세요:\n"
+        "- praat-parselmouth\n\n"
+        "(이미 requirements.txt가 있다면, 거기에 추가하면 됩니다.)"
+    )
+    st.stop()
 import numpy as np
 import pandas as pd
 import os
