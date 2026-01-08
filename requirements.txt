@@ -12,3 +12,4 @@ google-auth-httplib2
 google-auth-oauthlib
 gspread
 openpyxl
+streamlit-mic-recorder
