@@ -28,6 +28,161 @@ import io
 import html
 from pathlib import Path
 
+# =========================
+# Reference profile (training_data-based, PD only)
+# =========================
+import numpy as np
+
+@st.cache_data(show_spinner=False)
+def _load_training_reference():
+    """Load training_data.csv from repo root (if present) and build reference distributions.
+    Returns None if file is missing or invalid.
+    """
+    try:
+        csv_path = Path(__file__).with_name("training_data.csv")
+        if not csv_path.exists():
+            # also try current working directory (Streamlit Cloud sometimes runs from repo root)
+            alt = Path("training_data.csv")
+            csv_path = alt if alt.exists() else csv_path
+        if not csv_path.exists():
+            return None
+
+        import pandas as pd
+        df = pd.read_csv(csv_path, encoding="utf-8-sig")
+        # PD rows only (labels like PD_Intensity / PD_Rate / PD_Artic / etc.)
+        if "진단결과 (Label)" in df.columns:
+            df = df[df["진단결과 (Label)"].astype(str).str.startswith("PD", na=False)].copy()
+        if df.empty:
+            return None
+
+        # Safe numeric conversion
+        def _to_num(s):
+            return pd.to_numeric(s, errors="coerce")
+
+        df["강도(dB)"] = _to_num(df.get("강도(dB)"))
+        df["SPS"] = _to_num(df.get("SPS"))
+        df["Range"] = _to_num(df.get("Range"))
+        df["VHI총점"] = _to_num(df.get("VHI총점"))
+
+        # Burden percent for VHI-30 (0-120) to compare with VHI-10 percent (0-40)
+        df["VHI_burden_pct"] = (df["VHI총점"] / 120.0) * 100.0
+
+        ref = {
+            "n": int(df.shape[0]),
+            "intensity": df["강도(dB)"].dropna().to_numpy(dtype=float),
+            "sps": df["SPS"].dropna().to_numpy(dtype=float),
+            "vhi_burden_pct": df["VHI_burden_pct"].dropna().to_numpy(dtype=float),
+            "range_by_sex": {},
+        }
+
+        if "성별" in df.columns:
+            for sex in ["남", "여"]:
+                arr = df.loc[df["성별"].astype(str).str.strip().eq(sex), "Range"].dropna().to_numpy(dtype=float)
+                if arr.size >= 5:
+                    ref["range_by_sex"][sex] = arr
+
+        # Fallback: if sex-specific range too small, use all
+        if not ref["range_by_sex"]:
+            all_range = df["Range"].dropna().to_numpy(dtype=float)
+            if all_range.size >= 5:
+                ref["range_by_sex"]["all"] = all_range
+
+        # Need enough data to be meaningful
+        if ref["intensity"].size < 5 or ref["sps"].size < 5 or ref["vhi_burden_pct"].size < 5:
+            return None
+        return ref
+    except Exception:
+        return None
+
+def _percentile_rank(arr: np.ndarray, value: float) -> float:
+    """Return percentile rank (0-100)."""
+    if arr is None or len(arr) == 0 or value is None or not np.isfinite(value):
+        return float("nan")
+    a = np.sort(arr.astype(float))
+    # proportion <= value
+    return float((np.searchsorted(a, value, side="right") / a.size) * 100.0)
+
+def _q25_q75(arr: np.ndarray):
+    if arr is None or len(arr) == 0:
+        return (float("nan"), float("nan"))
+    return (float(np.nanpercentile(arr, 25)), float(np.nanpercentile(arr, 75)))
+
+def _band_label(value: float, q25: float, q75: float, labels):
+    """labels: (low, mid, high)"""
+    if not np.isfinite(value) or not np.isfinite(q25) or not np.isfinite(q75):
+        return None
+    if value < q25:
+        return labels[0]
+    if value > q75:
+        return labels[2]
+    return labels[1]
+
+def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p: int, vhi_e: int, patient_sex: str):
+    """Render a patient-facing, non-diagnostic reference profile using training distributions."""
+    ref = _load_training_reference()
+    if ref is None:
+        st.info("참고용 프로필은 현재 제공할 수 없습니다. (training_data 기준 분포를 불러오지 못했습니다.)")
+        return
+
+    st.subheader("참고용 음성 프로필(진단 아님)")
+    st.caption(f"비교 기준: 연구팀 학습 데이터(파킨슨병 진단자) 분포 **N={ref['n']}**. "
+               "아래 내용은 **진단이 아니라 참고용 설명**입니다.")
+
+    # Pick range distribution
+    sex = (patient_sex or "").strip()
+    rng_arr = ref["range_by_sex"].get(sex) or ref["range_by_sex"].get("all")
+
+    intensity = float(analysis.get("intensity_db", float('nan'))) if isinstance(analysis, dict) else float('nan')
+    sps = float(analysis.get("sps", float('nan'))) if isinstance(analysis, dict) else float('nan')
+    prange = float(analysis.get("range", float('nan'))) if isinstance(analysis, dict) else float('nan')
+
+    # VHI-10 to burden percent (0-40 -> 0-100)
+    vhi_burden_pct_10 = float(vhi_total) / 40.0 * 100.0 if vhi_total is not None else float('nan')
+
+    # Bands
+    i_q25, i_q75 = _q25_q75(ref["intensity"])
+    s_q25, s_q75 = _q25_q75(ref["sps"])
+    r_q25, r_q75 = _q25_q75(rng_arr) if rng_arr is not None else (float('nan'), float('nan'))
+    v_q25, v_q75 = _q25_q75(ref["vhi_burden_pct"])
+
+    intensity_band = _band_label(intensity, i_q25, i_q75, ("작은 편", "중간 범위", "큰 편"))
+    sps_band = _band_label(sps, s_q25, s_q75, ("느린 편", "중간 범위", "빠른 편"))
+    range_band = _band_label(prange, r_q25, r_q75, ("좁은 편", "중간 범위", "넓은 편"))
+    vhi_band = _band_label(vhi_burden_pct_10, v_q25, v_q75, ("낮은 편", "중간 범위", "높은 편"))
+
+    # Percentile ranks for visual bars
+    i_pr = _percentile_rank(ref["intensity"], intensity)
+    s_pr = _percentile_rank(ref["sps"], sps)
+    r_pr = _percentile_rank(rng_arr, prange) if rng_arr is not None else float('nan')
+    v_pr = _percentile_rank(ref["vhi_burden_pct"], vhi_burden_pct_10)
+
+    def _bar(label, pr):
+        if not np.isfinite(pr):
+            st.write(f"- **{label}**: 계산 불가")
+            return
+        st.write(f"- **{label}**: 분포 내 위치 약 **{pr:.0f}퍼센타일**")
+        st.progress(int(pr) / 100.0)
+
+    # Friendly interpretation text (no good/bad wording)
+    bullets = []
+    if intensity_band:
+        bullets.append(f"**목소리 크기(강도)**는 연구 참여자 분포에서 **{intensity_band}**이에요.")
+    if sps_band:
+        bullets.append(f"**말속도**는 **{sps_band}**이에요. (빠르거나 느린 것은 상황에 따라 체감이 달라질 수 있어요.)")
+    if range_band:
+        bullets.append(f"**음도 범위(높낮이 변화)**는 **{range_band}**이에요.")
+    if vhi_band:
+        bullets.append(f"**VHI-10(자가지각 부담)**은 **{vhi_band}**이에요. "
+                       "※ VHI-10(0–40)을 **부담 비율(%)**로 환산해 VHI-30(0–120) 분포와 비교했습니다.")
+
+    st.markdown("\n".join([f"- {b}" for b in bullets]))
+
+    with st.expander("분포 내 상대적 위치(퍼센타일) 보기", expanded=False):
+        _bar("강도(dB)", i_pr)
+        _bar("말속도(SPS)", s_pr)
+        _bar("음도 범위(Hz)", r_pr)
+        _bar("VHI 부담(%)", v_pr)
+
 # Optional (cloud + email)
 import smtplib
 from email.mime.text import MIMEText
@@ -890,6 +1045,24 @@ c1.metric("총점", f"{vhi_total}점")
 c2.metric("기능(F)", f"{vhi_f}점")
 c3.metric("신체(P)", f"{vhi_p}점")
 c4.metric("정서(E)", f"{vhi_e}점")
+
+st.markdown("---")
+
+# =========================
+# Reference profile (patient-facing, non-diagnostic)
+# =========================
+analysis_now = st.session_state.get("analysis")
+patient_info_now = st.session_state.get("patient_info", {})
+patient_sex_now = patient_info_now.get("gender", "") if isinstance(patient_info_now, dict) else ""
+if analysis_now is not None:
+    _render_reference_profile(
+        analysis_now,
+        vhi_total,
+        vhi_f,
+        vhi_p,
+        vhi_e,
+        patient_sex_now
+    )
 
 st.markdown("---")
 
