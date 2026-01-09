@@ -672,6 +672,47 @@ if rec and isinstance(rec, dict) and rec.get("bytes"):
     except Exception as e:
         st.error(f"녹음 데이터 처리 중 오류가 발생했습니다: {e}")
 
+# --- Waveform preview (always visible) ---
+st.subheader("녹음 파형(참고)")
+wav_bytes_preview = st.session_state.get("wav_bytes")
+try:
+    import io as _io
+    import wave as _wave
+    import numpy as _np
+    import pandas as _pd
+
+    if wav_bytes_preview and isinstance(wav_bytes_preview, (bytes, bytearray)):
+        with _wave.open(_io.BytesIO(wav_bytes_preview), "rb") as _wf:
+            _n = _wf.getnframes()
+            _frames = _wf.readframes(_n)
+            _ch = _wf.getnchannels()
+            _sw = _wf.getsampwidth()
+        # Expect 16-bit PCM; if not, fallback to a flat line
+        if _sw == 2 and _n > 0:
+            _data = _np.frombuffer(_frames, dtype=_np.int16)
+            if _ch > 1:
+                _data = _data[::_ch]
+            # downsample for display
+            _max_points = 2000
+            if _data.size > _max_points:
+                _idx = _np.linspace(0, _data.size - 1, _max_points).astype(int)
+                _data = _data[_idx]
+            _y = (_data.astype(float) / 32768.0)
+        else:
+            _y = _np.zeros(400, dtype=float)
+    else:
+        _y = _np.zeros(400, dtype=float)
+
+    _df = _pd.DataFrame({"amplitude": _y})
+    st.line_chart(_df, height=160, use_container_width=True)
+    if not wav_bytes_preview:
+        st.caption("아직 녹음이 없습니다. 아래 **🔴 녹음 시작** 버튼을 눌러 녹음을 진행해주세요.")
+except Exception:
+    # If anything fails (e.g., unexpected encoding), show a simple placeholder.
+    import numpy as _np
+    import pandas as _pd
+    st.line_chart(_pd.DataFrame({"amplitude": _np.zeros(400)}), height=160, use_container_width=True)
+
 st.markdown("---")
 
 # =========================
