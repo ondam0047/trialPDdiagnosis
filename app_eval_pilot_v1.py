@@ -124,9 +124,9 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
         st.info("참고용 프로필은 현재 제공할 수 없습니다. (training_data 기준 분포를 불러오지 못했습니다.)")
         return
 
-    st.subheader("참고용 음성 프로필(진단 아님)")
-    st.caption(f"비교 기준: 연구팀 학습 데이터(파킨슨병 진단자) 분포 **N={ref['n']}**. "
-               "아래 내용은 **진단이 아니라 참고용 설명**입니다.")
+    st.subheader("참고용 음성 프로필")
+    st.caption("참고용 음성 프로필: 진단이 아니라 환자분의 목소리를 나타내줍니다.")
+    st.caption(f"비교 기준: 연구팀 학습 데이터(파킨슨병 진단자) 분포 N={ref['n']}. 진단이 아니라 참고용 설명입니다.")
 
     # Pick range distribution
     sex_raw = (patient_sex or "").strip()
@@ -176,32 +176,40 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
     r_pr = _percentile_rank(rng_arr, prange) if rng_arr is not None else float('nan')
     v_pr = _percentile_rank(ref["vhi_burden_pct"], vhi_burden_pct_10)
 
-    def _bar(label, pr):
+    def _rank_from_percentile(pr: float) -> int:
+        """Convert percentile(0-100) to a 1-100 style rank for user-friendly display."""
         if not np.isfinite(pr):
-            st.write(f"- **{label}**: 계산 불가")
+            return 0
+        r = int(round(float(pr)))
+        return max(1, min(100, r))
+
+    def _bar_rank(label, pr):
+        if not np.isfinite(pr):
+            st.write(f"- {label}: 계산 불가")
             return
-        st.write(f"- **{label}**: 분포 내 위치 약 **{pr:.0f}퍼센타일**")
-        st.progress(int(pr) / 100.0)
+        rank = _rank_from_percentile(pr)
+        st.write(f"- {label}: 환자 분은 100등 중 약 {rank}등입니다.")
+        st.progress(int(rank) / 100.0)
 
     # Friendly interpretation text (no good/bad wording)
     bullets = []
     if intensity_band:
-        bullets.append(f"**목소리 크기(강도)**는 연구 참여자 분포에서 **{intensity_band}**이에요.")
+        bullets.append(f"목소리 크기(강도)는 연구 참여자 분포에서 {intensity_band}이에요.")
     if sps_band:
-        bullets.append(f"**말속도**는 **{sps_band}**이에요. (빠르거나 느린 것은 상황에 따라 체감이 달라질 수 있어요.)")
+        bullets.append(f"말속도는 {sps_band}이에요. (빠르거나 느린 것은 상황에 따라 체감이 달라질 수 있어요.)")
     if range_band:
-        bullets.append(f"**음도 범위(높낮이 변화)**는 **{range_band}**이에요.")
+        bullets.append(f"음도 범위(높낮이 변화)는 {range_band}이에요.")
     if vhi_band:
-        bullets.append(f"**VHI-10(자가지각 부담)**은 **{vhi_band}**이에요. "
-                       "※ VHI-10(0–40)을 **부담 비율(%)**로 환산해 VHI-30(0–120) 분포와 비교했습니다.")
+        bullets.append(f"VHI-10(자가지각 부담)은 {vhi_band}이에요.")
 
-    st.markdown("\n".join([f"- {b}" for b in bullets]))
+    for b in bullets:
+        st.write(f"• {b}")
 
-    with st.expander("분포 내 상대적 위치(퍼센타일) 보기", expanded=False):
-        _bar("강도(dB)", i_pr)
-        _bar("말속도(SPS)", s_pr)
-        _bar("음도 범위(Hz)", r_pr)
-        _bar("VHI 부담(%)", v_pr)
+    with st.expander("분포 내 상대적 위치(등수) 보기", expanded=False):
+        _bar_rank("강도(dB)", i_pr)
+        _bar_rank("말속도(SPS)", s_pr)
+        _bar_rank("음도 범위(Hz)", r_pr)
+        _bar_rank("VHI 부담(%)", v_pr)
 
 # Optional (cloud + email)
 import smtplib
