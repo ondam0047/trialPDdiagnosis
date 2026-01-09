@@ -129,8 +129,28 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
                "아래 내용은 **진단이 아니라 참고용 설명**입니다.")
 
     # Pick range distribution
-    sex = (patient_sex or "").strip()
-    rng_arr = ref["range_by_sex"].get(sex) or ref["range_by_sex"].get("all")
+    sex_raw = (patient_sex or "").strip()
+    # Normalize sex labels to match training_data keys (e.g., '남' / '여')
+    if sex_raw in ("남", "남성", "M", "Male", "male"):
+        sex = "남"
+    elif sex_raw in ("여", "여성", "F", "Female", "female"):
+        sex = "여"
+    else:
+        sex = sex_raw  # use as-is (may already match)
+
+    def _pick_arr(d: dict, k: str, fallback: str = "all"):
+        """Pick a numpy array from dict without triggering truth-value ambiguity."""
+        arr = d.get(k)
+        if arr is None:
+            return d.get(fallback)
+        try:
+            if len(arr) == 0:
+                return d.get(fallback)
+        except Exception:
+            pass
+        return arr
+
+    rng_arr = _pick_arr(ref.get("range_by_sex", {}), sex, "all")
 
     intensity = float(analysis.get("intensity_db", float('nan'))) if isinstance(analysis, dict) else float('nan')
     sps = float(analysis.get("sps", float('nan'))) if isinstance(analysis, dict) else float('nan')
