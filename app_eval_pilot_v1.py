@@ -633,41 +633,6 @@ try:
 except ModuleNotFoundError:
     HAS_MIC_RECORDER = False
 
-def _plot_waveform(wav_bytes: bytes):
-    """Lightweight waveform preview (downsampled)."""
-    import wave
-    try:
-        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-            n_channels = wf.getnchannels()
-            sampwidth = wf.getsampwidth()
-            fr = wf.getframerate()
-            n_frames = wf.getnframes()
-            frames = wf.readframes(n_frames)
-        if sampwidth != 2:
-            # fall back: just skip waveform if sample width is unexpected
-            st.caption("파형 미리보기(참고): 현재 파일 형식에서는 파형을 표시할 수 없습니다.")
-            return
-        x = np.frombuffer(frames, dtype=np.int16)
-        if n_channels > 1:
-            x = x[::n_channels]
-        # normalize
-        x = x.astype(np.float32) / 32768.0
-        # downsample for speed
-        max_points = 4000
-        if x.size > max_points:
-            idx = np.linspace(0, x.size - 1, max_points).astype(int)
-            x = x[idx]
-        dfw = pd.DataFrame({"amplitude": x})
-        st.line_chart(dfw, height=150)
-    except Exception:
-        st.caption("파형 미리보기(참고): 표시할 수 없습니다.")
-
-# Show previous waveform BEFORE starting a new recording (helps users confirm something exists)
-if st.session_state.get("wav_bytes"):
-    st.markdown("**이전 녹음 파형(참고)**")
-    _plot_waveform(st.session_state["wav_bytes"])
-    st.audio(st.session_state["wav_bytes"], format="audio/wav")
-
 if not HAS_MIC_RECORDER:
     st.error(
         "필수 패키지(streamlit-mic-recorder)가 설치되지 않아 녹음을 사용할 수 없습니다.\n\n"
@@ -676,17 +641,26 @@ if not HAS_MIC_RECORDER:
     )
     st.stop()
 
-rec = mic_recorder(
+rec_raw = mic_recorder(
     start_prompt="🔴 녹음 시작",
     stop_prompt="⏹️ 녹음 정지",
     just_once=False,
+    use_container_width=True,
+    format="wav",  # IMPORTANT: ensure WAV so parselmouth can read it
     key="one_button_recorder",
 )
+# When a key is used, the package also exposes a convenient '<key>_output' state
+rec = st.session_state.get("one_button_recorder_output") or rec_raw
 
 TEMP_WAV = "temp_eval.wav"
 if rec and isinstance(rec, dict) and rec.get("bytes"):
     try:
         data = rec["bytes"]
+        fmt = str(rec.get("format", "wav")).lower()
+        # Sanity-check: ensure WAV container so parselmouth/wave can read it
+        if fmt != "wav" or (isinstance(data, (bytes, bytearray)) and (len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE")):
+            st.error("녹음 데이터 형식이 WAV가 아닙니다. 브라우저/패키지 설정을 확인해주세요. (필요: WAV 형식)")
+            st.stop()
         # Save to a predictable temp wav (overwrite is OK for this pilot flow)
         with open(TEMP_WAV, "wb") as f:
             f.write(data)
@@ -698,8 +672,6 @@ if rec and isinstance(rec, dict) and rec.get("bytes"):
     except Exception as e:
         st.error(f"녹음 데이터 처리 중 오류가 발생했습니다: {e}")
 
-if st.session_state.get("wav_bytes"):
-    st.audio(st.session_state["wav_bytes"], format="audio/wav")
 st.markdown("---")
 
 # =========================
@@ -735,7 +707,10 @@ def compute_pitch_stats(sound: parselmouth.Sound, gender: str):
     return f0_mean, f0_range, start_t, end_t
 
 def analyze_wav(path: str, gender: str):
-    sound = parselmouth.Sound(path)
+    try:
+        sound = parselmouth.Sound(path)
+    except Exception as e:
+        raise RuntimeError(f"음성 파일을 읽을 수 없습니다(WAV 형식/파일 손상 여부 확인 필요): {e}")
     f0_mean, f0_range, start_t, end_t = compute_pitch_stats(sound, gender)
 
     intensity = sound.to_intensity()
