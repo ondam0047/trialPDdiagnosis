@@ -3,6 +3,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import base64
 import re
+import hashlib
 
 # NOTE: This app requires Praat-Parselmouth for F0/Intensity/Pitch-range extraction.
 # Streamlit Cloud will raise ModuleNotFoundError unless you add it to requirements.txt:
@@ -661,14 +662,32 @@ if rec and isinstance(rec, dict) and rec.get("bytes"):
         if fmt != "wav" or (isinstance(data, (bytes, bytearray)) and (len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE")):
             st.error("녹음 데이터 형식이 WAV가 아닙니다. 브라우저/패키지 설정을 확인해주세요. (필요: WAV 형식)")
             st.stop()
-        # Save to a predictable temp wav (overwrite is OK for this pilot flow)
-        with open(TEMP_WAV, "wb") as f:
-            f.write(data)
-        st.session_state["wav_path"] = str(Path(TEMP_WAV).resolve())
-        st.session_state["wav_bytes"] = data
-        # New recording -> clear previous analysis (so results match the latest audio)
-        if "analysis" in st.session_state:
-            del st.session_state["analysis"]
+
+        # IMPORTANT:
+        # streamlit-mic-recorder는 녹음이 끝난 후에도 마지막 bytes를 계속 반환할 수 있어
+        # 매 rerun마다 파일을 다시 쓰거나 분석 결과를 지우면(=analysis 삭제) 사용자가
+        # '분석'을 했는데도 '전송' 단계에서 분석 결과가 없다고 나오는 문제가 생깁니다.
+        # 따라서 bytes 해시가 바뀐 '새 녹음'일 때만 파일 저장/analysis 초기화를 수행합니다.
+        data_bytes = bytes(data) if not isinstance(data, (bytes, bytearray)) else data
+        new_hash = hashlib.sha1(data_bytes).hexdigest()
+        prev_hash = st.session_state.get("wav_hash")
+
+        if new_hash != prev_hash:
+            with open(TEMP_WAV, "wb") as f:
+                f.write(data_bytes)
+            st.session_state["wav_path"] = str(Path(TEMP_WAV).resolve())
+            st.session_state["wav_bytes"] = data_bytes
+            st.session_state["wav_hash"] = new_hash
+            # New recording -> clear previous analysis (so results match the latest audio)
+            if "analysis" in st.session_state:
+                del st.session_state["analysis"]
+        else:
+            # Same recording as before: do NOT rewrite file or clear analysis
+            if "wav_path" not in st.session_state:
+                st.session_state["wav_path"] = str(Path(TEMP_WAV).resolve())
+            if "wav_bytes" not in st.session_state:
+                st.session_state["wav_bytes"] = data_bytes
+
     except Exception as e:
         st.error(f"녹음 데이터 처리 중 오류가 발생했습니다: {e}")
 
@@ -895,8 +914,19 @@ if st.button("📤 결과 저장/전송", type="primary", disabled=already_sent)
     if not wav_path or not os.path.exists(wav_path):
         st.error("녹음 파일이 없습니다. 먼저 녹음을 진행해주세요.")
     elif not analysis:
-        st.error("분석 결과가 없습니다. [📈 녹음된 음성 분석]을 먼저 눌러주세요.")
-    else:
+        # 사용자가 [📈 녹음된 음성 분석]을 누르지 않고 바로 전송하는 경우가 많아
+        # 이 단계에서 자동으로 분석을 1회 수행합니다.
+        try:
+            gender = (st.session_state.get("patient_info", {}).get("gender") or "")
+            analysis = analyze_wav(wav_path, gender)
+            st.session_state["analysis"] = analysis
+            st.info("ℹ️ 분석 결과가 없어 자동으로 **녹음된 음성 분석**을 수행했습니다.")
+        except Exception as e:
+            st.error("분석 결과가 없습니다. 먼저 **[📈 녹음된 음성 분석]**을 눌러주세요.")
+            st.caption(f"자동 분석 실패: {e}")
+            st.stop()
+
+    if analysis:
         analysis = dict(analysis)
         analysis["vhi_total"] = st.session_state.get("vhi_total", "")
         analysis["vhi_f"] = st.session_state.get("vhi_f", "")
