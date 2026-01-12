@@ -127,7 +127,6 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
     st.subheader("참고용 음성 프로필")
     st.caption("참고용 음성 프로필: 진단이 아니라 환자분의 목소리를 나타내줍니다.")
     st.caption(f"비교 기준: 연구팀 학습 데이터(파킨슨병 진단자) 분포 N={ref['n']} · 진단이 아니라 참고용 설명입니다.")
-    st.caption("환자분의 목소리 녹음을 위해 조용한 환경에서 녹음해주세요.")
 
     # Pick range distribution
     sex_raw = (patient_sex or "").strip()
