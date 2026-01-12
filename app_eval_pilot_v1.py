@@ -126,7 +126,8 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
 
     st.subheader("참고용 음성 프로필")
     st.caption("참고용 음성 프로필: 진단이 아니라 환자분의 목소리를 나타내줍니다.")
-    st.caption(f"비교 기준: 연구팀 학습 데이터(파킨슨병 진단자) 분포 N={ref['n']}. 진단이 아니라 참고용 설명입니다.")
+    st.caption(f"비교 기준: 연구팀 학습 데이터(파킨슨병 진단자) 분포 N={ref['n']} · 진단이 아니라 참고용 설명입니다.")
+    st.caption("환자분의 목소리 녹음을 위해 조용한 환경에서 녹음해주세요.")
 
     # Pick range distribution
     sex_raw = (patient_sex or "").strip()
@@ -159,7 +160,7 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
     # VHI-10 to burden percent (0-40 -> 0-100)
     vhi_burden_pct_10 = float(vhi_total) / 40.0 * 100.0 if vhi_total is not None else float('nan')
 
-    # Bands
+    # Bands (patient-friendly)
     i_q25, i_q75 = _q25_q75(ref["intensity"])
     s_q25, s_q75 = _q25_q75(ref["sps"])
     r_q25, r_q75 = _q25_q75(rng_arr) if rng_arr is not None else (float('nan'), float('nan'))
@@ -170,46 +171,45 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
     range_band = _band_label(prange, r_q25, r_q75, ("좁은 편", "중간 범위", "넓은 편"))
     vhi_band = _band_label(vhi_burden_pct_10, v_q25, v_q75, ("낮은 편", "중간 범위", "높은 편"))
 
-    # Percentile ranks for visual bars
+    # Percentile ranks (0-100)
     i_pr = _percentile_rank(ref["intensity"], intensity)
     s_pr = _percentile_rank(ref["sps"], sps)
     r_pr = _percentile_rank(rng_arr, prange) if rng_arr is not None else float('nan')
     v_pr = _percentile_rank(ref["vhi_burden_pct"], vhi_burden_pct_10)
 
-    def _rank_from_percentile(pr: float) -> int:
-        """Convert percentile(0-100) to a 1-100 style rank for user-friendly display."""
+    def _fmt_pr(pr: float) -> str:
         if not np.isfinite(pr):
-            return 0
-        r = int(round(float(pr)))
-        return max(1, min(100, r))
+            return ""
+        return f"({int(round(pr))}%ile)"
 
-    def _bar_rank(label, pr):
+    def _bar_percentile(label: str, pr: float, band: str):
         if not np.isfinite(pr):
             st.write(f"- {label}: 계산 불가")
             return
-        rank = _rank_from_percentile(pr)
-        st.write(f"- {label}: 환자 분은 100등 중 약 {rank}등입니다.")
-        st.progress(int(rank) / 100.0)
+        pr_i = int(round(float(pr)))
+        pr_i = max(0, min(100, pr_i))
+        st.write(f"- {label}: {band} {_fmt_pr(pr)}")
+        st.progress(pr_i / 100.0)
 
     # Friendly interpretation text (no good/bad wording)
     bullets = []
     if intensity_band:
-        bullets.append(f"목소리 크기(강도)는 연구 참여자 분포에서 {intensity_band}이에요.")
+        bullets.append(f"목소리 크기(강도)는 {intensity_band} {_fmt_pr(i_pr)}")
     if sps_band:
-        bullets.append(f"말속도는 {sps_band}이에요. (빠르거나 느린 것은 상황에 따라 체감이 달라질 수 있어요.)")
+        bullets.append(f"말속도는 {sps_band} {_fmt_pr(s_pr)}")
     if range_band:
-        bullets.append(f"음도 범위(높낮이 변화)는 {range_band}이에요.")
+        bullets.append(f"음도 범위(높낮이 변화)는 {range_band} {_fmt_pr(r_pr)}")
     if vhi_band:
-        bullets.append(f"VHI-10(자가지각 부담)은 {vhi_band}이에요.")
+        bullets.append(f"VHI-10(자가지각 부담)은 {vhi_band} {_fmt_pr(v_pr)}")
 
     for b in bullets:
         st.write(f"• {b}")
 
-    with st.expander("분포 내 상대적 위치(등수) 보기", expanded=False):
-        _bar_rank("강도(dB)", i_pr)
-        _bar_rank("말속도(SPS)", s_pr)
-        _bar_rank("음도 범위(Hz)", r_pr)
-        _bar_rank("VHI 부담(%)", v_pr)
+    with st.expander("분포 내 상대적 위치 보기", expanded=False):
+        _bar_percentile("강도(dB)", i_pr, intensity_band or "")
+        _bar_percentile("말속도(SPS)", s_pr, sps_band or "")
+        _bar_percentile("음도 범위(Hz)", r_pr, range_band or "")
+        _bar_percentile("VHI 부담", v_pr, vhi_band or "")
 
 # Optional (cloud + email)
 import smtplib
