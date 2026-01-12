@@ -639,7 +639,7 @@ def consent_block():
         diag_years = st.number_input("진단연차(진단 후 경과년수) *", min_value=0, max_value=60, value=0, step=1)
         dopa_meds = st.selectbox("도파민 약(레보도파 등) 복용 여부 *", ["예", "아니오", "모름"])
         hearing_issue = st.selectbox("청각 문제(난청/보청기/이명 등) 여부 *", ["없음", "있음", "모름"])
-        device = st.selectbox("녹음 기기 *", ["노트북", "핸드폰", "태블릿", "외장 마이크/레코더", "기타"])
+        device = st.selectbox("녹음 기기 *", ["노트북", "핸드폰", "태블릿", "외장 마이크", "기타"])
         mic = st.text_input("마이크 정보(선택)", value="")
         # --- Research team test mode (bypass duplicate guard) ---
         with st.expander("연구팀 테스트(중복 참여 허용)", expanded=False):
@@ -775,7 +775,8 @@ def _instructions_body():
         "- 너무 잘 읽으려고 하지도, 일부러 안 좋게 읽으려고 하지도 말고 **편안하게** 읽어주세요.\n"
         "- **[녹음 시작] → 낭독 → [정지] → [녹음된 음성 분석]** 순서로 진행합니다.\n"
         "- 분석 후 **VHI-10 작성 → [결과 저장/전송]**을 눌러주세요.\n"
-        "- 본 연구는 동일 참여자의 **중복 참여가 제한**될 수 있어, 이미 참여하신 경우 **재참여가 어려울 수 있습니다.**"
+        "- 본 연구는 동일 참여자의 **중복 참여가 제한**될 수 있어, 이미 참여하신 경우 **재참여가 어려울 수 있습니다.**\n"
+        "- 정확한 목소리 녹음을 위해 조용한 환경에서 녹음해주세요"
     )
     if st.button("닫기"):
         st.session_state.show_instructions = False
