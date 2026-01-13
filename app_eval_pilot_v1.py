@@ -1100,20 +1100,17 @@ if st.button("📤 결과 저장/전송", type="primary", disabled=already_sent)
     if not wav_path or not os.path.exists(wav_path):
         st.error("녹음 파일이 없습니다. 먼저 녹음을 진행해주세요.")
     elif not analysis:
-        # 사용자가 [📈 녹음된 음성 분석]을 누르지 않고 바로 전송하는 경우가 많아
+        # 사용자가 [📈 녹음된 음성 분석]을 누르지 않고 바로 전송하는 경우가 있어
         # 이 단계에서 자동으로 분석을 1회 수행합니다.
         try:
             gender = (st.session_state.get("patient_info", {}).get("gender") or "")
             analysis = analyze_wav(wav_path, gender)
-            st.session_state["analysis"] = a
-        # Reference profile is shown only after send
-        st.session_state["show_ref_profile_after_send"] = Falsenalysis
+            st.session_state["analysis"] = analysis
             st.info("ℹ️ 분석 결과가 없어 자동으로 **녹음된 음성 분석**을 수행했습니다.")
         except Exception as e:
             st.error("분석 결과가 없습니다. 먼저 **[📈 녹음된 음성 분석]**을 눌러주세요.")
             st.caption(f"자동 분석 실패: {e}")
             st.stop()
-
     if analysis:
         analysis = dict(analysis)
         analysis["vhi_total"] = st.session_state.get("vhi_total", "")
