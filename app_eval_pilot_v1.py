@@ -127,6 +127,7 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
     st.subheader("참고용 음성 프로필")
     st.caption("참고용 음성 프로필: 진단이 아니라 환자분의 목소리를 나타내줍니다.")
     st.caption(f"비교 기준: 연구팀 학습 데이터(파킨슨병 진단자) 분포 N={ref['n']} · 진단이 아니라 참고용 설명입니다.")
+    st.caption("환자분의 목소리 녹음을 위해 조용한 환경에서 녹음해주세요.")
 
     # Pick range distribution
     sex_raw = (patient_sex or "").strip()
@@ -197,7 +198,7 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
     if sps_band:
         bullets.append(f"말속도는 {sps_band} {_fmt_pr(s_pr)}")
     if range_band:
-        bullets.append(f"음도 범위(높낮이 변화)는 {range_band} {_fmt_pr(r_pr)}")
+        bullets.append(f"억양(높낮이 변화)는 {range_band} {_fmt_pr(r_pr)}")
     if vhi_band:
         bullets.append(f"VHI-10(자가지각 부담)은 {vhi_band} {_fmt_pr(v_pr)}")
 
@@ -207,7 +208,7 @@ def _render_reference_profile(analysis: dict, vhi_total: int, vhi_f: int, vhi_p:
     with st.expander("분포 내 상대적 위치 보기", expanded=False):
         _bar_percentile("강도(dB)", i_pr, intensity_band or "")
         _bar_percentile("말속도(SPS)", s_pr, sps_band or "")
-        _bar_percentile("음도 범위(Hz)", r_pr, range_band or "")
+        _bar_percentile("억양(Hz)", r_pr, range_band or "")
         _bar_percentile("VHI 부담", v_pr, vhi_band or "")
 
 # Optional (cloud + email)
@@ -638,7 +639,7 @@ def consent_block():
         diag_years = st.number_input("진단연차(진단 후 경과년수) *", min_value=0, max_value=60, value=0, step=1)
         dopa_meds = st.selectbox("도파민 약(레보도파 등) 복용 여부 *", ["예", "아니오", "모름"])
         hearing_issue = st.selectbox("청각 문제(난청/보청기/이명 등) 여부 *", ["없음", "있음", "모름"])
-        device = st.selectbox("녹음 기기 *", ["노트북", "핸드폰", "태블릿", "외장 마이크", "기타"])
+        device = st.selectbox("녹음 기기 *", ["노트북", "핸드폰", "태블릿", "외장 마이크/레코더", "기타"])
         mic = st.text_input("마이크 정보(선택)", value="")
         # --- Research team test mode (bypass duplicate guard) ---
         with st.expander("연구팀 테스트(중복 참여 허용)", expanded=False):
@@ -734,7 +735,7 @@ def consent_block():
 if not st.session_state.enrolled:
     st.info("""📌 연구 목적(요약)
 
-안녕하세요. 본 연구는 **대림대학교 언어치료학과**에서 **파킨슨병(PD)** 진단을 받은 분들의 **낭독 음성**을 수집하여, **음향학적 지표(평균 음도, 음도 범위, 평균 강도, 말속도)**와 **자가지각 설문(VHI-10)**이 어떤 양상으로 나타나는지 분석하고, 이를 바탕으로 향후 **평가 도구** 및 **중재(훈련/디지털 치료)** 개발에 활용하기 위해 진행됩니다.
+안녕하세요. 본 연구는 **대림대학교 언어치료학과**에서 **파킨슨병(PD)** 진단을 받은 분들의 **낭독 음성**을 수집하여, **음향학적 지표(평균 음도, 억양, 평균 강도, 말속도)**와 **자가지각 설문(VHI-10)**이 어떤 양상으로 나타나는지 분석하고, 이를 바탕으로 향후 **평가 도구** 및 **중재(훈련/디지털 치료)** 개발에 활용하기 위해 진행됩니다.
 
 연구에 참여하실 경우,
 
@@ -748,7 +749,6 @@ if not st.session_state.enrolled:
 4) **[녹음 시작] → 낭독 → [정지] → [녹음된 음성 분석]** 순서로 진행합니다.  
 5) 마지막으로 **VHI-10**을 작성하고 **[결과 저장/전송]**을 눌러주세요.  
 6) 본 연구는 동일 참여자의 **중복 참여가 제한**될 수 있어, 이미 참여하신 경우 **재참여가 어려울 수 있습니다.**
-7) 정확한 목소리 녹음을 위해 **조용한 환경**에서 녹음해주세요. 
 """)
     consent_block()
     st.stop()
@@ -775,8 +775,7 @@ def _instructions_body():
         "- 너무 잘 읽으려고 하지도, 일부러 안 좋게 읽으려고 하지도 말고 **편안하게** 읽어주세요.\n"
         "- **[녹음 시작] → 낭독 → [정지] → [녹음된 음성 분석]** 순서로 진행합니다.\n"
         "- 분석 후 **VHI-10 작성 → [결과 저장/전송]**을 눌러주세요.\n"
-        "- 본 연구는 동일 참여자의 **중복 참여가 제한**될 수 있어, 이미 참여하신 경우 **재참여가 어려울 수 있습니다.**\n"
-        "- 정확한 목소리 녹음을 위해 **조용한 환경**에서 녹음해주세요"
+        "- 본 연구는 동일 참여자의 **중복 참여가 제한**될 수 있어, 이미 참여하신 경우 **재참여가 어려울 수 있습니다.**"
     )
     if st.button("닫기"):
         st.session_state.show_instructions = False
@@ -980,11 +979,13 @@ if st.button("📈 녹음된 음성 분석"):
         g = st.session_state.patient_info.get("gender", "남")
         a = analyze_wav(wav_path, g)
         st.session_state["analysis"] = a
+        # Reference profile is shown only after send
+        st.session_state["show_ref_profile_after_send"] = False
 
 analysis = st.session_state.get("analysis")
 if analysis:
     df = pd.DataFrame({
-        "항목": ["평균 음도(Hz)", "음도 범위(Hz)", "평균 강도(dB)", "말속도(SPS)"],
+               "항목": ["평균 음도(Hz)", "억양(Hz)", "평균 강도(dB)", "말속도(SPS)"],
         "수치": [
             f"{analysis['f0']:.2f}" if np.isfinite(analysis['f0']) else "",
             f"{analysis['range']:.2f}" if np.isfinite(analysis['range']) else "",
@@ -1077,23 +1078,6 @@ c4.metric("정서(E)", f"{vhi_e}점")
 
 st.markdown("---")
 
-# =========================
-# Reference profile (patient-facing, non-diagnostic)
-# =========================
-analysis_now = st.session_state.get("analysis")
-patient_info_now = st.session_state.get("patient_info", {})
-patient_sex_now = patient_info_now.get("gender", "") if isinstance(patient_info_now, dict) else ""
-if analysis_now is not None:
-    _render_reference_profile(
-        analysis_now,
-        vhi_total,
-        vhi_f,
-        vhi_p,
-        vhi_e,
-        patient_sex_now
-    )
-
-st.markdown("---")
 
 # =========================
 # Section 4: Save/Send
@@ -1121,7 +1105,9 @@ if st.button("📤 결과 저장/전송", type="primary", disabled=already_sent)
         try:
             gender = (st.session_state.get("patient_info", {}).get("gender") or "")
             analysis = analyze_wav(wav_path, gender)
-            st.session_state["analysis"] = analysis
+            st.session_state["analysis"] = a
+        # Reference profile is shown only after send
+        st.session_state["show_ref_profile_after_send"] = Falsenalysis
             st.info("ℹ️ 분석 결과가 없어 자동으로 **녹음된 음성 분석**을 수행했습니다.")
         except Exception as e:
             st.error("분석 결과가 없습니다. 먼저 **[📈 녹음된 음성 분석]**을 눌러주세요.")
@@ -1162,6 +1148,31 @@ if st.button("📤 결과 저장/전송", type="primary", disabled=already_sent)
         else:
             st.error("❌ 저장/전송에 실패했습니다. 아래 로그를 확인하세요.")
 
+        # Show reference profile ONLY after a send attempt that succeeded at least partly
+        if email_ok or sheet_ok:
+            st.session_state["show_ref_profile_after_send"] = True
+
+
         st.write(f"- 저장 파일명: `{log_filename}`")
         st.write(f"- 구글시트: {'성공' if sheet_ok else '실패/생략'} · {sheet_msg}")
         st.write(f"- 이메일: {'성공' if email_ok else '실패/생략'} · {email_msg}")
+
+
+
+# =========================
+# Reference profile (shown after successful send)
+# =========================
+if st.session_state.get("show_ref_profile_after_send", False):
+    analysis_now = st.session_state.get("analysis")
+    patient_info_now = st.session_state.get("patient_info", {})
+    patient_sex_now = patient_info_now.get("gender", "") if isinstance(patient_info_now, dict) else ""
+    if analysis_now is not None:
+        _render_reference_profile(
+            analysis_now,
+            int(st.session_state.get("vhi_total", 0) or 0),
+            int(st.session_state.get("vhi_f", 0) or 0),
+            int(st.session_state.get("vhi_p", 0) or 0),
+            int(st.session_state.get("vhi_e", 0) or 0),
+            patient_sex_now,
+        )
+
