@@ -243,20 +243,36 @@ else{ window.parent.scrollTo(0,0); }
 
 # --- Prevent duplicate submissions in the same browser session ---
 def make_submission_key(wav_path: str, patient_info: dict) -> str:
-    """Create a stable-ish key for the current recording to prevent duplicate sends."""
+    """Create a stable key for the current recording to prevent duplicate sends.
+
+    Priority:
+    1) wav_hash (SHA1) if available (most stable across reruns)
+    2) fallback to (basename|mtime|size)
+    """
+    p = patient_info or {}
+    name = str(p.get("name", "")).strip()
+    age = str(p.get("age", "")).strip()
+    gender = str(p.get("gender", "")).strip()
+    wav_hash = str(p.get("wav_hash", "")).strip()
+    if wav_hash:
+        return f"{wav_hash}|{name}|{age}|{gender}"
+
     try:
         mtime = os.path.getmtime(wav_path) if wav_path and os.path.exists(wav_path) else 0.0
         size = os.path.getsize(wav_path) if wav_path and os.path.exists(wav_path) else 0
     except Exception:
         mtime, size = 0.0, 0
-    p = patient_info or {}
-    name = str(p.get("name", "")).strip()
-    age = str(p.get("age", "")).strip()
-    gender = str(p.get("gender", "")).strip()
+
     return f"{os.path.basename(wav_path)}|{mtime:.3f}|{size}|{name}|{age}|{gender}"
+
 
 if "sent_submission_keys" not in st.session_state:
     st.session_state["sent_submission_keys"] = set()
+if "email_sent_keys" not in st.session_state:
+    st.session_state["email_sent_keys"] = set()
+if "sheet_saved_keys" not in st.session_state:
+    st.session_state["sheet_saved_keys"] = set()
+
 
 def reset_for_new_evaluation():
     """Reset state for a brand-new participant/evaluation (keeps app running without refreshing the page)."""
@@ -427,17 +443,24 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
     """Send wav to research email and append a row to Google Sheet.
     Returns: (log_filename, sheet_ok, sheet_msg, email_ok, email_msg)
     """
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = str(patient_info.get("recording_ts") or datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
     # Build a safe filename label for logging/email
     raw_name = str(patient_info.get("name", "participant"))
     safe_name = re.sub(r"[^0-9A-Za-z가-힣_\-]+", "", raw_name.replace(" ", "")) or "participant"
     log_prefix = "TEST_" if patient_info.get("is_test") else ""
     log_filename = f"{log_prefix}{safe_name}_{patient_info.get('age','')}_{patient_info.get('gender','')}_{timestamp}.wav"
 
+    # Idempotency: prevent duplicated email/sheet rows for the same recording
+    sub_key = make_submission_key(wav_path, {**(patient_info or {}), "wav_hash": st.session_state.get("wav_hash", patient_info.get("wav_hash",""))})
+    email_already = sub_key in st.session_state.get("email_sent_keys", set())
+    sheet_already = sub_key in st.session_state.get("sheet_saved_keys", set())
     # --- Google Sheet ---
     sheet_ok = False
     sheet_msg = ""
-    if HAS_GSPREAD and ("gcp_service_account" in st.secrets) and (SHEET_NAME is not None):
+    if sheet_already:
+        sheet_ok = True
+        sheet_msg = "이미 저장됨(중복 방지)"
+    if (not sheet_already) and HAS_GSPREAD and ("gcp_service_account" in st.secrets) and (SHEET_NAME is not None):
         try:
             # Streamlit secrets may store newlines as literal "\n". Google auth expects real newlines.
             svc_info = dict(st.secrets["gcp_service_account"])
@@ -506,17 +529,21 @@ def send_email_and_log_sheet(wav_path: str, patient_info: dict, analysis: dict, 
     # --- Email ---
     email_ok = False
     email_msg = ""
-    try:
-        sender = st.secrets["email"]["sender"]
-        password = st.secrets["email"]["password"]
-        receiver = st.secrets["email"]["receiver"]
+    if email_already:
+        email_ok = True
+        email_msg = "이미 전송됨(중복 방지)"
+    else:
+        try:
+            sender = st.secrets["email"]["sender"]
+            password = st.secrets["email"]["password"]
+            receiver = st.secrets["email"]["receiver"]
 
-        msg = MIMEMultipart()
-        msg["From"] = sender
-        msg["To"] = receiver
-        msg["Subject"] = f"[PD Pilot] {log_filename}"
+            msg = MIMEMultipart()
+            msg["From"] = sender
+            msg["To"] = receiver
+            msg["Subject"] = f"[PD Pilot] {log_filename}"
 
-        body = f"""[PD Pilot - New Sample]
+            body = f"""[PD Pilot - New Sample]
 timestamp: {timestamp}
 filename: {log_filename}
 
@@ -527,14 +554,11 @@ gender: {patient_info.get('gender','')}
 diag_years: {patient_info.get('diag_years','')}
 dopamine_meds: {patient_info.get('dopa_meds','')}
 hearing_issue: {patient_info.get('hearing_issue','')}
-
 device: {patient_info.get('device','')}
-mic: {patient_info.get('mic','')}
-distance_30cm_confirmed: {patient_info.get('distance_ok','')}
 
-F0: {analysis.get('f0','')}
-range: {analysis.get('range','')}
-intensity_dB: {analysis.get('intensity_db','')}
+F0_Hz: {analysis.get('f0_hz','')}
+Range_Hz: {analysis.get('range_hz','')}
+Intensity_dB: {analysis.get('intensity_db','')}
 SPS: {analysis.get('sps','')}
 
 VHI_total: {analysis.get('vhi_total','')}
@@ -542,32 +566,28 @@ VHI_F: {analysis.get('vhi_f','')}
 VHI_P: {analysis.get('vhi_p','')}
 VHI_E: {analysis.get('vhi_e','')}
 
-final_diagnosis(model): {final_diag}
-""".strip()
-        msg.attach(MIMEText(body, "plain"))
+Final: {final_diag}
+"""
 
-        with open(wav_path, "rb") as f:
-            part = MIMEBase("audio", "wav")
-            part.set_payload(f.read())
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition", f"attachment; filename={log_filename}")
-        msg.attach(part)
+            msg.attach(MIMEText(body, "plain", "utf-8"))
 
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(sender, password)
-        server.sendmail(sender, receiver, msg.as_string())
-        server.quit()
+            with open(wav_path, "rb") as f:
+                part = MIMEApplication(f.read(), Name=log_filename)
+            part["Content-Disposition"] = f'attachment; filename="{log_filename}"'
+            msg.attach(part)
 
-        email_ok = True
-        email_msg = "이메일 전송 성공"
-    except KeyError:
-        email_ok = False
-        email_msg = "이메일 전송 생략(Secrets 미설정)"
-    except Exception as e:
-        email_ok = False
-        email_msg = f"이메일 전송 실패: {type(e).__name__}: {e}"
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(sender, password)
+                server.sendmail(sender, receiver, msg.as_string())
 
+            email_ok = True
+            email_msg = "이메일 전송 성공"
+        except KeyError as e:
+            email_ok = False
+            email_msg = f"Secrets 미설정: {e}"
+        except Exception as e:
+            email_ok = False
+            email_msg = f"이메일 전송 실패: {type(e).__name__}: {e}"
     return log_filename, sheet_ok, sheet_msg, email_ok, email_msg
 
 # -------------------------
@@ -861,6 +881,7 @@ if rec and isinstance(rec, dict) and rec.get("bytes"):
             st.session_state["wav_path"] = str(Path(TEMP_WAV).resolve())
             st.session_state["wav_bytes"] = data_bytes
             st.session_state["wav_hash"] = new_hash
+            st.session_state["recording_ts"] = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             # New recording -> clear previous analysis (so results match the latest audio)
             if "analysis" in st.session_state:
                 del st.session_state["analysis"]
@@ -1088,74 +1109,107 @@ st.caption("※ 이 단계에서는 환자에게 하위집단 진단 결과를 �
 # Duplicate-send guard (same recording within the same session)
 wav_path_now = st.session_state.get("wav_path")
 analysis_now = st.session_state.get("analysis")
-sub_key = make_submission_key(wav_path_now, st.session_state.get("patient_info", {})) if wav_path_now else ""
+pinfo_for_key = dict(st.session_state.get("patient_info", {}) or {})
+if st.session_state.get("wav_hash"):
+    pinfo_for_key["wav_hash"] = st.session_state.get("wav_hash")
+if st.session_state.get("recording_ts"):
+    pinfo_for_key["recording_ts"] = st.session_state.get("recording_ts")
+sub_key = make_submission_key(wav_path_now, pinfo_for_key) if wav_path_now else ""
 already_sent = bool(sub_key) and (sub_key in st.session_state["sent_submission_keys"])
 if already_sent:
     st.info("✅ 이 녹음 건은 이미 전송이 완료되었습니다. (중복 전송 방지)\n\n새로 녹음한 뒤 [📈 녹음된 음성 분석]을 다시 누르면 전송 버튼이 다시 활성화됩니다.")
 
-if st.button("📤 결과 저장/전송", type="primary", disabled=already_sent):
-    wav_path = st.session_state.get("wav_path")
-    analysis = st.session_state.get("analysis")
+# --- 전송 버튼(중복 클릭 방지 + 로딩 표시) ---
+if "is_sending" not in st.session_state:
+    st.session_state["is_sending"] = False
+if "send_requested" not in st.session_state:
+    st.session_state["send_requested"] = False
 
-    if not wav_path or not os.path.exists(wav_path):
-        st.error("녹음 파일이 없습니다. 먼저 녹음을 진행해주세요.")
-    elif not analysis:
-        # 사용자가 [📈 녹음된 음성 분석]을 누르지 않고 바로 전송하는 경우가 있어
-        # 이 단계에서 자동으로 분석을 1회 수행합니다.
-        try:
-            gender = (st.session_state.get("patient_info", {}).get("gender") or "")
-            analysis = analyze_wav(wav_path, gender)
-            st.session_state["analysis"] = analysis
-            st.info("ℹ️ 분석 결과가 없어 자동으로 **녹음된 음성 분석**을 수행했습니다.")
-        except Exception as e:
-            st.error("분석 결과가 없습니다. 먼저 **[📈 녹음된 음성 분석]**을 눌러주세요.")
-            st.caption(f"자동 분석 실패: {e}")
-            st.stop()
-    if analysis:
-        analysis = dict(analysis)
-        analysis["vhi_total"] = st.session_state.get("vhi_total", "")
-        analysis["vhi_f"] = st.session_state.get("vhi_f", "")
-        analysis["vhi_p"] = st.session_state.get("vhi_p", "")
-        analysis["vhi_e"] = st.session_state.get("vhi_e", "")
+if st.session_state["is_sending"] and not already_sent:
+    st.info("⏳ 전송 중입니다... **완료 메시지가 나올 때까지** 잠시만 기다려주세요. (여러 번 누르지 마세요)")
 
-        # Internal label for research logging (not shown to participant)
-        final_diag, _probs = predict_step2(
-            STEP2_MODEL,
-            float(analysis.get("intensity_db", np.nan)),
-            float(analysis.get("sps", np.nan)),
-        )
+send_disabled = already_sent or st.session_state["is_sending"]
+if st.button("📤 결과 저장/전송", type="primary", disabled=send_disabled):
+    st.session_state["send_requested"] = True
+    st.session_state["is_sending"] = True
+    st.rerun()
 
-        log_filename, sheet_ok, sheet_msg, email_ok, email_msg = send_email_and_log_sheet(
-            wav_path,
-            st.session_state.get("patient_info", {}),
-            analysis,
-            final_diag or ""
-        )
-
-        # Mark as sent only when BOTH email + sheet succeeded (prevents accidental duplicates)
-        if sheet_ok and email_ok and sub_key:
-            st.session_state["sent_submission_keys"].add(sub_key)
-
-        if sheet_ok and email_ok:
-            st.success("✅ 저장/전송을 완료했습니다.\n\n**향후 연구에 도움이 될 수 있도록 참여해주셔서 감사합니다.**")
-        elif email_ok and (not sheet_ok):
-            st.warning("⚠️ 이메일 전송은 성공했지만, 구글시트 저장은 실패했습니다.")
-        elif sheet_ok and (not email_ok):
-            st.warning("⚠️ 구글시트 저장은 성공했지만, 이메일 전송은 실패했습니다.")
-        else:
-            st.error("❌ 저장/전송에 실패했습니다. 아래 로그를 확인하세요.")
-
-        # Show reference profile ONLY after a send attempt that succeeded at least partly
-        if email_ok or sheet_ok:
-            st.session_state["show_ref_profile_after_send"] = True
-
-
-        st.write(f"- 저장 파일명: `{log_filename}`")
-        st.write(f"- 구글시트: {'성공' if sheet_ok else '실패/생략'} · {sheet_msg}")
-        st.write(f"- 이메일: {'성공' if email_ok else '실패/생략'} · {email_msg}")
-
-
-
+if st.session_state.get("send_requested") and not already_sent:
+    try:
+        with st.spinner("전송 중입니다..."):
+            wav_path = st.session_state.get("wav_path")
+            analysis = st.session_state.get("analysis")
+        
+            if not wav_path or not os.path.exists(wav_path):
+                st.error("녹음 파일이 없습니다. 먼저 녹음을 진행해주세요.")
+            elif not analysis:
+                # 사용자가 [📈 녹음된 음성 분석]을 누르지 않고 바로 전송하는 경우가 있어
+                # 이 단계에서 자동으로 분석을 1회 수행합니다.
+                try:
+                    gender = (st.session_state.get("patient_info", {}).get("gender") or "")
+                    analysis = analyze_wav(wav_path, gender)
+                    st.session_state["analysis"] = analysis
+                    st.info("ℹ️ 분석 결과가 없어 자동으로 **녹음된 음성 분석**을 수행했습니다.")
+                except Exception as e:
+                    st.error("분석 결과가 없습니다. 먼저 **[📈 녹음된 음성 분석]**을 눌러주세요.")
+                    st.caption(f"자동 분석 실패: {e}")
+                    st.stop()
+            if analysis:
+                analysis = dict(analysis)
+                analysis["vhi_total"] = st.session_state.get("vhi_total", "")
+                analysis["vhi_f"] = st.session_state.get("vhi_f", "")
+                analysis["vhi_p"] = st.session_state.get("vhi_p", "")
+                analysis["vhi_e"] = st.session_state.get("vhi_e", "")
+        
+                # Internal label for research logging (not shown to participant)
+                final_diag, _probs = predict_step2(
+                    STEP2_MODEL,
+                    float(analysis.get("intensity_db", np.nan)),
+                    float(analysis.get("sps", np.nan)),
+                )
+        
+                log_filename, sheet_ok, sheet_msg, email_ok, email_msg = send_email_and_log_sheet(
+                    wav_path,
+                    st.session_state.get("patient_info", {}),
+                    analysis,
+                    final_diag or ""
+                )
+        
+                # Mark as sent only when BOTH email + sheet succeeded (prevents accidental duplicates)
+                if sheet_ok and sub_key:
+                    st.session_state["sheet_saved_keys"].add(sub_key)
+                if email_ok and sub_key:
+                    st.session_state["email_sent_keys"].add(sub_key)
+                if sheet_ok and email_ok and sub_key:
+                    st.session_state["sent_submission_keys"].add(sub_key)
+        
+                if sheet_ok and email_ok:
+                    st.success("✅ 저장/전송을 완료했습니다.\n\n**향후 연구에 도움이 될 수 있도록 참여해주셔서 감사합니다.**")
+                elif email_ok and (not sheet_ok):
+                    st.warning("⚠️ 이메일 전송은 성공했지만, 구글시트 저장은 실패했습니다.")
+                elif sheet_ok and (not email_ok):
+                    st.warning("⚠️ 구글시트 저장은 성공했지만, 이메일 전송은 실패했습니다.")
+                else:
+                    st.error("❌ 저장/전송에 실패했습니다. 아래 로그를 확인하세요.")
+        
+                # Show reference profile ONLY after a send attempt that succeeded at least partly
+                if email_ok or sheet_ok:
+                    st.session_state["show_ref_profile_after_send"] = True
+        
+        
+                st.write(f"- 저장 파일명: `{log_filename}`")
+                st.write(f"- 구글시트: {'성공' if sheet_ok else '실패/생략'} · {sheet_msg}")
+                st.write(f"- 이메일: {'성공' if email_ok else '실패/생략'} · {email_msg}")
+        
+        
+        
+    finally:
+        st.session_state["is_sending"] = False
+        st.session_state["send_requested"] = False
+elif st.session_state.get("send_requested") and already_sent:
+    # 이미 전송된 상태에서 남아있는 플래그 정리
+    st.session_state["is_sending"] = False
+    st.session_state["send_requested"] = False
 # =========================
 # Reference profile (shown after successful send)
 # =========================
@@ -1172,4 +1226,3 @@ if st.session_state.get("show_ref_profile_after_send", False):
             int(st.session_state.get("vhi_e", 0) or 0),
             patient_sex_now,
         )
-
